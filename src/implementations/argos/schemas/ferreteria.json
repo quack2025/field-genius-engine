@@ -2,9 +2,41 @@
   "implementation": "argos",
   "visit_type": "ferreteria",
   "display_name": "Visita a Ferretería",
-  "description": "Auditoría de punto de venta: precios, exhibición, competencia",
+  "description": "Auditoría de punto de venta: presencia Argos, precios, exhibición, competencia y oportunidades comerciales",
   "primary_media": ["image", "voice"],
   "categories": [
+    {
+      "id": "presencia_argos",
+      "label": "Presencia Argos en el punto",
+      "description": "Evaluación de la presencia institucional y de producto de Argos en el punto de venta",
+      "fields": [
+        { "id": "tiene_aviso_argos", "type": "boolean", "label": "Tiene aviso/logo Argos exterior" },
+        { "id": "tiene_material_pop", "type": "boolean", "label": "Hay material POP Argos interior" },
+        { "id": "tiene_producto_visible", "type": "boolean", "label": "Hay producto Argos en góndola" },
+        { "id": "brecha_institucional", "type": "boolean", "label": "Presencia institucional sin producto" },
+        { "id": "nivel_presencia", "type": "string", "label": "Nivel general (alta/media/baja/nula)" },
+        { "id": "detalle_presencia", "type": "string", "label": "Descripción de lo observado" }
+      ],
+      "is_array": false,
+      "applies_to": ["image"]
+    },
+    {
+      "id": "perfil_del_punto",
+      "label": "Perfil y categorías del punto",
+      "description": "Caracterización del punto de venta: qué vende, qué tan relevante es, y oportunidades para Argos",
+      "fields": [
+        { "id": "categorias_principales", "type": "string", "label": "Categorías que maneja (cemento, pintura, acabados, ferretería general, plomería, eléctrico)" },
+        { "id": "tamano_punto", "type": "string", "label": "Tamaño del punto (pequeño/mediano/grande)" },
+        { "id": "relevancia_argos", "type": "string", "label": "Relevancia para Argos (alta/media/baja)" },
+        { "id": "densidad_surtido", "type": "string", "label": "Nivel de surtido (alto/medio/bajo)" },
+        { "id": "organizacion", "type": "string", "label": "Organización del punto (buena/regular/mala)" },
+        { "id": "senales_actividad", "type": "string", "label": "Señales de demanda activa observadas" },
+        { "id": "oportunidad_producto", "type": "string", "label": "Línea de Argos que podría entrar y no está hoy" },
+        { "id": "score_oportunidad", "type": "number", "label": "Score de oportunidad 1-10 (10=máxima oportunidad)" }
+      ],
+      "is_array": false,
+      "applies_to": ["image", "voice"]
+    },
     {
       "id": "precios",
       "label": "Precios capturados",
@@ -12,6 +44,7 @@
       "fields": [
         { "id": "producto", "type": "string", "label": "Producto/referencia" },
         { "id": "marca", "type": "string", "label": "Marca" },
+        { "id": "categoria", "type": "string", "label": "Categoría (cemento/mortero/pintura/acabados/otro)" },
         { "id": "precio", "type": "number", "label": "Precio COP" },
         { "id": "presentacion", "type": "string", "label": "Presentación (ej: bolsa 50kg)" }
       ],
@@ -23,7 +56,7 @@
       "label": "Espacio en góndola",
       "description": "Proporción de espacio visual de Argos vs competencia en el punto de venta",
       "fields": [
-        { "id": "argos_facing", "type": "string", "label": "Espacio Argos (alto/medio/bajo)" },
+        { "id": "argos_facing", "type": "string", "label": "Espacio Argos (alto/medio/bajo/nulo)" },
         { "id": "competencia_dominante", "type": "string", "label": "Marca con más espacio" },
         { "id": "notas", "type": "string", "label": "Observaciones" }
       ],
@@ -33,11 +66,12 @@
     {
       "id": "actividad_competencia",
       "label": "Actividad de competencia",
-      "description": "Acciones comerciales, promociones o novedades de marcas competidoras detectadas",
+      "description": "Marcas competidoras detectadas con su categoría y acciones comerciales",
       "fields": [
         { "id": "marca", "type": "string", "label": "Marca competidora" },
-        { "id": "actividad", "type": "string", "label": "Descripción (promo, descuento, nuevo producto)" },
-        { "id": "alerta", "type": "boolean", "label": "¿Requiere atención urgente?" }
+        { "id": "categoria", "type": "string", "label": "Categoría (cemento/mortero/pintura/acabados/otro)" },
+        { "id": "actividad", "type": "string", "label": "Descripción (promo, descuento, nuevo producto, presencia)" },
+        { "id": "alerta", "type": "boolean", "label": "Requiere atención urgente" }
       ],
       "is_array": true,
       "applies_to": ["image", "voice", "text"]

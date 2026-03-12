@@ -260,35 +260,81 @@ def build_whatsapp_summary(
     reports: list[dict[str, Any]],
     session: dict[str, Any],
 ) -> str:
-    """Build a text summary for WhatsApp delivery alongside the PDF."""
+    """Build an actionable WhatsApp summary — alerts and opportunities first."""
     user_name = session.get("user_name", "Ejecutivo")
     date_str = session.get("date", str(datetime.date.today()))
+    file_count = len(session.get("raw_files", []))
+
     lines = [
-        f"Reporte de campo — {user_name}",
-        f"Fecha: {date_str}",
-        f"Visitas: {len(reports)}",
+        f"*Reporte de campo* - {user_name}",
+        f"Fecha: {date_str} | {len(reports)} visita(s) | {file_count} archivo(s)",
         "",
     ]
 
     for i, r in enumerate(reports, 1):
-        location = r.get("inferred_location", "Sin ubicación")
-        vtype = r.get("visit_type", "")
-        confidence = r.get("confidence_score", 0)
-        lines.append(f"{i}. {location} ({vtype}) — {confidence:.0%}")
-
-        # Quick highlights
+        location = r.get("inferred_location", "Sin ubicacion")
         extracted = r.get("extracted_data", {})
-        for cat_id, cat_data in extracted.items():
-            if cat_id in ("confidence_score", "needs_clarification", "clarification_questions"):
-                continue
-            if isinstance(cat_data, list) and cat_data:
-                lines.append(f"   {cat_id.replace('_', ' ').title()}: {len(cat_data)} registros")
-            elif isinstance(cat_data, dict):
-                filled = sum(1 for v in cat_data.values() if v)
-                if filled:
-                    lines.append(f"   {cat_id.replace('_', ' ').title()}: {filled} campos")
 
-    lines.append("")
-    lines.append("PDF adjunto con el detalle completo.")
+        # Header with location
+        presencia = extracted.get("presencia_argos", {})
+        if isinstance(presencia, dict) and presencia.get("nivel_presencia"):
+            nivel = presencia["nivel_presencia"]
+            lines.append(f"{'='*30}")
+            lines.append(f"*{i}. {location}*")
+            lines.append(f"Presencia Argos: {nivel}")
+        else:
+            lines.append(f"{'='*30}")
+            lines.append(f"*{i}. {location}*")
+
+        # Alert: institutional gap
+        if isinstance(presencia, dict) and presencia.get("brecha_institucional"):
+            lines.append("")
+            lines.append("ALERTA: Tiene presencia institucional Argos pero SIN producto visible en gondola.")
+
+        # Profile
+        perfil = extracted.get("perfil_del_punto", {})
+        if isinstance(perfil, dict):
+            cats = perfil.get("categorias_principales", "")
+            if cats:
+                lines.append("")
+                lines.append(f"Perfil: {cats}")
+
+            surtido = perfil.get("densidad_surtido", "")
+            org = perfil.get("organizacion", "")
+            senales = perfil.get("senales_actividad", "")
+            estado_parts = []
+            if surtido:
+                estado_parts.append(f"surtido {surtido}")
+            if org:
+                estado_parts.append(f"organizacion {org}")
+            if estado_parts:
+                lines.append(f"Estado: {', '.join(estado_parts)}")
+            if senales:
+                lines.append(f"Actividad: {senales}")
+
+            oportunidad = perfil.get("oportunidad_producto", "")
+            score = perfil.get("score_oportunidad", 0)
+            if oportunidad:
+                score_str = f" (score: {score}/10)" if score else ""
+                lines.append(f"Oportunidad: {oportunidad}{score_str}")
+
+        # Competition highlights
+        competencia = extracted.get("actividad_competencia", [])
+        if isinstance(competencia, list) and competencia:
+            marcas = [c.get("marca", "?") for c in competencia if isinstance(c, dict) and c.get("marca")]
+            alertas = [c for c in competencia if isinstance(c, dict) and c.get("alerta")]
+            if marcas:
+                lines.append(f"Competencia: {', '.join(marcas)}")
+            for a in alertas:
+                lines.append(f"  Alerta competencia: {a.get('marca', '?')} - {a.get('actividad', '?')}")
+
+        # Prices summary
+        precios = extracted.get("precios", [])
+        if isinstance(precios, list) and precios:
+            lines.append(f"Precios: {len(precios)} producto(s) registrados")
+
+        lines.append("")
+
+    lines.append("Detalle completo en Google Sheets.")
 
     return "\n".join(lines)

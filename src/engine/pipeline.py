@@ -286,7 +286,7 @@ async def process_session(session_id: str) -> PipelineResult:
         result.error = str(e)
         result.elapsed_ms = int((time.time() - start) * 1000)
 
-        await update_session_status(session_id, "completed")
+        await update_session_status(session_id, "failed")
         logger.error("pipeline_failed", session_id=session_id, error=str(e), elapsed_ms=result.elapsed_ms)
 
         return result

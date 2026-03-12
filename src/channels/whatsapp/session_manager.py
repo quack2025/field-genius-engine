@@ -87,6 +87,10 @@ async def handle_text(
                 "message": "Ya generaste tu reporte de hoy. Los archivos nuevos se incluirán en el reporte de mañana.",
             }
 
+        # Allow retry on failed sessions
+        if status == "failed":
+            logger.info("trigger_retry_failed", phone=phone, session_id=session["id"])
+
         file_count = len(session.get("raw_files", []))
         if file_count == 0:
             logger.info("trigger_empty_session", phone=phone, session_id=session["id"])
