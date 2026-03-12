@@ -184,9 +184,7 @@ async def process_session(session_id: str) -> PipelineResult:
                 from src.channels.whatsapp.sender import send_message
                 await send_message(
                     phone,
-                    f"Tengo una pregunta antes de generar tu reporte:
-
-{segmentation.clarification_message}"
+                    f"Tengo una pregunta antes de generar tu reporte:\n\n{segmentation.clarification_message}",
                 )
 
             logger.info(
