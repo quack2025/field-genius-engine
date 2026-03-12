@@ -178,6 +178,17 @@ async def process_session(session_id: str) -> PipelineResult:
             result.status = "needs_clarification"
             result.elapsed_ms = int((time.time() - start) * 1000)
 
+            # Send clarification question to user via WhatsApp
+            phone = session.get("user_phone", "")
+            if phone and segmentation.clarification_message:
+                from src.channels.whatsapp.sender import send_message
+                await send_message(
+                    phone,
+                    f"Tengo una pregunta antes de generar tu reporte:
+
+{segmentation.clarification_message}"
+                )
+
             logger.info(
                 "pipeline_needs_clarification",
                 message=segmentation.clarification_message,
