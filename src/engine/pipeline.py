@@ -225,43 +225,35 @@ async def process_session(session_id: str) -> PipelineResult:
                 confidence=extraction.confidence_score,
             )
 
-        # Step 5: Outputs — fire-and-forget for Sheets & Gamma, blocking for PDF
+        # Step 5: Outputs — Sheets only (PDF/Gamma temporarily disabled)
         await update_session_status(session_id, "generating_outputs")
         logger.info("pipeline_outputs_start", reports=len(report_data_list))
 
-        # Launch all output tasks concurrently
+        # Launch Sheets writes
         sheets_tasks = [
             _fire_and_forget_sheets(rd, session, implementation)
             for rd in report_data_list
         ]
-        gamma_task = _fire_and_forget_gamma(report_data_list, session)
-        pdf_task = _generate_and_upload_pdf(report_data_list, session)
-
-        sheets_results, gamma_result, pdf_url = await asyncio.gather(
-            asyncio.gather(*sheets_tasks, return_exceptions=True),
-            gamma_task,
-            pdf_task,
-        )
+        sheets_results = await asyncio.gather(*sheets_tasks, return_exceptions=True)
 
         # Collect Sheets results
         for sr in sheets_results:
             if isinstance(sr, str):
                 result.sheets_tabs.append(sr)
 
-        result.gamma_result = gamma_result
-        result.pdf_url = pdf_url
+        # PDF and Gamma temporarily disabled — uncomment when ready:
+        # gamma_task = _fire_and_forget_gamma(report_data_list, session)
+        # pdf_task = _generate_and_upload_pdf(report_data_list, session)
 
         logger.info(
             "pipeline_outputs_complete",
             sheets_tabs=result.sheets_tabs,
-            gamma_mode=gamma_result.get("mode") if gamma_result else None,
-            has_pdf=pdf_url is not None,
         )
 
-        # Step 6: WhatsApp delivery — send summary + PDF to executive
+        # Step 6: WhatsApp delivery — text summary only (no PDF for now)
         phone = session.get("user_phone", "")
         if phone:
-            await _send_whatsapp_delivery(phone, report_data_list, session, pdf_url)
+            await _send_whatsapp_delivery(phone, report_data_list, session, None)
 
         # Step 7: Mark session complete
         await update_session_status(session_id, "completed")
