@@ -113,6 +113,32 @@ async def handle_text(
             "message": f"Procesando {file_count} archivo(s). Te notifico cuando esté listo.",
         }
 
+    # If session is waiting for clarification, treat any text as clarification response
+    status = session.get("status", "accumulating")
+    if status == "needs_clarification":
+        logger.info(
+            "clarification_response_received",
+            phone=phone,
+            session_id=session["id"],
+            response=body[:100],
+        )
+        # Save the clarification response as a text note
+        text_meta = {
+            "filename": None,
+            "storage_path": None,
+            "type": "clarification_response",
+            "content_type": "text/plain",
+            "body": body,
+            "timestamp": datetime.datetime.now(datetime.UTC).isoformat(),
+        }
+        await add_file_to_session(session["id"], text_meta)
+        return {
+            "action": "clarification_received",
+            "session": session,
+            "message": "Gracias, procesando tu reporte con esa informacion...",
+            "clarification_text": body,
+        }
+
     # Not a trigger — add as text note
     text_meta = {
         "filename": None,

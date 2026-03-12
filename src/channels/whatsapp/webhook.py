@@ -124,6 +124,15 @@ async def twilio_webhook(request: Request) -> Response:
             from src.engine.pipeline import process_session
             session = await get_or_create_session(phone, dt.date.today())
             await process_session(session["id"])
+        elif result["action"] == "clarification_received":
+            await send_message(from_phone, result["message"])
+            # Resume pipeline from Phase 2 with clarification context
+            from src.engine.pipeline import resume_after_clarification
+            session = result["session"]
+            await resume_after_clarification(
+                session["id"],
+                result["clarification_text"],
+            )
         elif result["action"] == "empty_session":
             await send_message(from_phone, result["message"])
         elif result["action"] == "text_added":

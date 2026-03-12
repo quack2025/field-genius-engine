@@ -10,7 +10,7 @@ from typing import Any
 
 import structlog
 
-from src.engine.segmenter import segment_session, SegmentationResult
+from src.engine.segmenter import segment_session, SegmentationResult, VisitSegment
 from src.engine.extractor import extract_visit, ExtractedVisit
 from src.engine.supabase_client import (
     get_session,
@@ -275,7 +275,7 @@ async def process_session(session_id: str) -> PipelineResult:
             visits_processed=len(result.extractions),
             reports_saved=len(result.report_ids),
             sheets_tabs=result.sheets_tabs,
-            has_pdf=pdf_url is not None,
+            has_pdf=False,
             elapsed_ms=result.elapsed_ms,
         )
 
@@ -289,4 +289,174 @@ async def process_session(session_id: str) -> PipelineResult:
         await update_session_status(session_id, "failed")
         logger.error("pipeline_failed", session_id=session_id, error=str(e), elapsed_ms=result.elapsed_ms)
 
+        return result
+
+
+def _rebuild_visits_from_segments(
+    segments: dict[str, Any],
+    clarification_text: str,
+) -> list[VisitSegment]:
+    """Rebuild VisitSegment objects from saved segments JSON, merging all files
+    into a single visit when the user confirms they belong together."""
+    sessions = segments.get("sessions", [])
+
+    # User confirmed all files belong together — merge into one visit
+    if len(sessions) > 1:
+        merged_files: list[str] = []
+        merged_transcriptions: dict[str, str] = {}
+        merged_image_descriptions: dict[str, str] = {}
+        merged_text_notes: list[str] = [clarification_text]
+
+        first = sessions[0]
+        for s in sessions:
+            merged_files.extend(s.get("files", []))
+
+        return [VisitSegment(
+            segment_id="merged-1",
+            inferred_location=first.get("inferred_location", "Sin ubicacion"),
+            visit_type=first.get("visit_type", "ferreteria"),
+            confidence=0.9,
+            files=merged_files,
+            time_range=first.get("time_range", ""),
+            transcriptions=merged_transcriptions,
+            image_descriptions=merged_image_descriptions,
+            text_notes=merged_text_notes,
+        )]
+
+    # Single visit — just rebuild with clarification context
+    visits: list[VisitSegment] = []
+    for s in sessions:
+        visits.append(VisitSegment(
+            segment_id=s.get("id", "session-1"),
+            inferred_location=s.get("inferred_location", "Sin ubicacion"),
+            visit_type=s.get("visit_type", "ferreteria"),
+            confidence=s.get("confidence", 0.8),
+            files=s.get("files", []),
+            time_range=s.get("time_range", ""),
+            text_notes=[clarification_text],
+        ))
+    return visits
+
+
+async def resume_after_clarification(
+    session_id: str,
+    clarification_text: str,
+) -> PipelineResult:
+    """Resume pipeline from Phase 2 after user clarification.
+
+    Uses saved segments from the session, merges visits if user confirmed
+    they belong together, then runs extraction + outputs.
+    """
+    start = time.time()
+    logger.info("pipeline_resume_clarification", session_id=session_id)
+
+    result = PipelineResult(session_id=session_id)
+
+    try:
+        session = await get_session(session_id)
+        if not session:
+            result.status = "failed"
+            result.error = f"Session {session_id} not found"
+            return result
+
+        segments = session.get("segments", {})
+        if not segments:
+            result.status = "failed"
+            result.error = "No saved segments found"
+            logger.error("pipeline_resume_no_segments", session_id=session_id)
+            return result
+
+        # Rebuild visits from saved segments + clarification
+        visits = _rebuild_visits_from_segments(segments, clarification_text)
+        logger.info("pipeline_resume_visits", count=len(visits))
+
+        # We need image descriptions for extraction — re-analyze images
+        raw_files = session.get("raw_files", [])
+        from src.engine.supabase_client import get_client as get_sb_client
+
+        for visit in visits:
+            for filename in visit.files:
+                # Find the file entry to get storage_path
+                file_entry = next(
+                    (f for f in raw_files if f.get("filename") == filename),
+                    None,
+                )
+                if not file_entry:
+                    continue
+
+                storage_path = file_entry.get("storage_path", "")
+                file_type = file_entry.get("type", "")
+
+                if file_type == "image" and storage_path:
+                    from src.engine.vision import analyze_from_storage
+                    desc = await analyze_from_storage(storage_path)
+                    visit.image_descriptions[filename] = desc
+
+        # Phase 2: Extraction
+        await update_session_status(session_id, "processing")
+        implementation = session.get("implementation", "argos")
+        report_data_list: list[dict[str, Any]] = []
+
+        for i, visit in enumerate(visits):
+            logger.info(
+                "pipeline_extracting_visit",
+                visit_num=i + 1,
+                visit_type=visit.visit_type,
+                location=visit.inferred_location,
+            )
+
+            extraction = await extract_visit(visit, implementation)
+            result.extractions.append(extraction)
+
+            report_data = {
+                "session_id": session_id,
+                "implementation": implementation,
+                "visit_type": extraction.visit_type,
+                "inferred_location": extraction.inferred_location,
+                "extracted_data": extraction.extracted_data,
+                "confidence_score": extraction.confidence_score,
+                "status": "needs_review" if extraction.needs_review else "completed",
+                "processing_time_ms": extraction.elapsed_ms,
+            }
+            report_id = await save_visit_report(report_data)
+            result.report_ids.append(report_id)
+            report_data["id"] = report_id
+            report_data_list.append(report_data)
+
+        # Outputs
+        logger.info("pipeline_outputs_start", reports=len(report_data_list))
+        sheets_tasks = [
+            _fire_and_forget_sheets(rd, session, implementation)
+            for rd in report_data_list
+        ]
+        sheets_results = await asyncio.gather(*sheets_tasks, return_exceptions=True)
+        for sr in sheets_results:
+            if isinstance(sr, str):
+                result.sheets_tabs.append(sr)
+
+        # WhatsApp delivery
+        phone = session.get("user_phone", "")
+        if phone:
+            await _send_whatsapp_delivery(phone, report_data_list, session, None)
+
+        # Mark complete
+        await update_session_status(session_id, "completed")
+        result.status = "completed"
+        result.elapsed_ms = int((time.time() - start) * 1000)
+
+        logger.info(
+            "pipeline_resume_complete",
+            session_id=session_id,
+            visits=len(result.extractions),
+            elapsed_ms=result.elapsed_ms,
+        )
+
+        return result
+
+    except Exception as e:
+        result.status = "failed"
+        result.error = str(e)
+        result.elapsed_ms = int((time.time() - start) * 1000)
+        await update_session_status(session_id, "failed")
+        logger.error("pipeline_resume_failed", session_id=session_id, error=str(e))
         return result
