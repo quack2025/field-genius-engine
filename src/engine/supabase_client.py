@@ -31,7 +31,7 @@ async def get_user_by_phone(phone: str) -> dict[str, Any] | None:
     logger.info("get_user_by_phone", phone=phone)
     client = get_client()
     result = client.table("users").select("*").eq("phone", phone).maybe_single().execute()
-    return result.data
+    return result.data if result else None
 
 
 async def get_or_create_session(
