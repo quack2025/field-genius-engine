@@ -161,7 +161,7 @@ async def _call_claude_extraction(
 ) -> dict[str, Any] | None:
     """Call Claude Haiku for extraction and parse JSON response. Retry once on failure."""
     try:
-        client = Anthropic(api_key=settings.anthropic_api_key)
+        client = Anthropic(api_key=settings.anthropic_api_key, timeout=90.0)
         message = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=4096,

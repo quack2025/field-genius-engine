@@ -22,8 +22,8 @@ router = APIRouter(tags=["webhook"])
 def validate_twilio_signature(url: str, params: dict, signature: str) -> bool:
     """Validate X-Twilio-Signature HMAC to verify request authenticity."""
     if not settings.twilio_auth_token:
-        logger.warning("twilio_auth_token_missing", msg="Skipping signature validation")
-        return True
+        logger.error("twilio_auth_token_missing", msg="Rejecting request — no auth token configured")
+        return False
 
     # Build the data string: URL + sorted POST params concatenated
     data = url
@@ -68,7 +68,10 @@ async def twilio_webhook(request: Request) -> Response:
 
     from_phone = params.get("From", "")  # whatsapp:+573001234567
     body = params.get("Body", "").strip()
-    num_media = int(params.get("NumMedia", "0"))
+    try:
+        num_media = min(int(params.get("NumMedia", "0")), 10)  # Twilio max is 10
+    except (ValueError, TypeError):
+        num_media = 0
 
     # Strip 'whatsapp:' prefix for internal use
     phone = from_phone.replace("whatsapp:", "")

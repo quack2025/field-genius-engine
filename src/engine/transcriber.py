@@ -45,7 +45,7 @@ async def transcribe(storage_path: str) -> str:
         filename = f"audio.{ext}"
 
         # Call Whisper API
-        client = OpenAI(api_key=settings.openai_api_key)
+        client = OpenAI(api_key=settings.openai_api_key, timeout=60.0)
         audio_file = io.BytesIO(audio_bytes)
         audio_file.name = filename
 
@@ -79,7 +79,7 @@ async def transcribe_bytes(audio_bytes: bytes, filename: str = "audio.ogg") -> s
     logger.info("transcribe_bytes_start", filename=filename, size=len(audio_bytes))
 
     try:
-        client = OpenAI(api_key=settings.openai_api_key)
+        client = OpenAI(api_key=settings.openai_api_key, timeout=60.0)
         audio_file = io.BytesIO(audio_bytes)
         audio_file.name = filename
 

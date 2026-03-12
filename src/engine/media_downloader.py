@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 import structlog
@@ -60,6 +61,12 @@ async def download_and_store(
         content_type=content_type,
         storage_path=storage_path,
     )
+
+    # Validate URL is from Twilio (SSRF protection)
+    parsed = urlparse(media_url)
+    allowed_hosts = {'api.twilio.com', 'media.twiliocdn.com'}
+    if parsed.scheme != 'https' or parsed.hostname not in allowed_hosts:
+        raise ValueError(f'Media URL not from allowed Twilio domain: {media_url[:60]}')
 
     try:
         # Download from Twilio (requires basic auth)

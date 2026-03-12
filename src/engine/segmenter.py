@@ -173,7 +173,7 @@ Si alguna visita tiene confidence < 0.75 o hay archivos sin asignar, pon needs_c
 y en clarification_message explica qué necesitas saber del ejecutivo."""
 
     try:
-        client = Anthropic(api_key=settings.anthropic_api_key)
+        client = Anthropic(api_key=settings.anthropic_api_key, timeout=90.0)
         message = client.messages.create(
             model="claude-sonnet-4-20250514",
             max_tokens=2048,

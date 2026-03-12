@@ -66,7 +66,7 @@ async def analyze_image(image_bytes: bytes, context: str = "") -> str:
     logger.info("vision_analyze_start", size=len(image_bytes), context=context[:50] if context else "")
 
     try:
-        client = Anthropic(api_key=settings.anthropic_api_key)
+        client = Anthropic(api_key=settings.anthropic_api_key, timeout=90.0)
 
         # Encode image to base64
         image_b64 = base64.standard_b64encode(image_bytes).decode("utf-8")
