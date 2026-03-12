@@ -67,6 +67,26 @@ async def handle_text(
     session = await get_or_create_session(phone, today)
 
     if is_trigger(body):
+        status = session.get("status", "accumulating")
+
+        # Guard: already processing
+        if status in ("segmenting", "processing"):
+            logger.info("trigger_already_processing", phone=phone, status=status)
+            return {
+                "action": "empty_session",
+                "session": session,
+                "message": "Tu reporte se está procesando. Espera un momento.",
+            }
+
+        # Guard: already completed today
+        if status == "completed":
+            logger.info("trigger_already_completed", phone=phone)
+            return {
+                "action": "empty_session",
+                "session": session,
+                "message": "Ya generaste tu reporte de hoy. Los archivos nuevos se incluirán en el reporte de mañana.",
+            }
+
         file_count = len(session.get("raw_files", []))
         if file_count == 0:
             logger.info("trigger_empty_session", phone=phone, session_id=session["id"])
