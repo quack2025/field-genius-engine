@@ -235,7 +235,7 @@ async def process_session(session_id: str) -> PipelineResult:
             )
 
         # Step 5: Outputs — Sheets only (PDF/Gamma temporarily disabled)
-        await update_session_status(session_id, "generating_outputs")
+        # Note: stay in 'processing' status (generating_outputs not in DB CHECK constraint)
         logger.info("pipeline_outputs_start", reports=len(report_data_list))
 
         # Launch Sheets writes

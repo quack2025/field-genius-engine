@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     created_at timestamptz NOT NULL DEFAULT now(),
     updated_at timestamptz NOT NULL DEFAULT now(),
     CONSTRAINT sessions_status_check CHECK (
-        status IN ('accumulating', 'segmenting', 'processing', 'completed', 'needs_clarification')
+        status IN ('accumulating', 'segmenting', 'processing', 'generating_outputs', 'completed', 'needs_clarification', 'failed')
     )
 );
 
