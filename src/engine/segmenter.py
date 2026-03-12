@@ -1,0 +1,260 @@
+"""Segmenter — Phase 1: identify distinct visits in a day's capture batch."""
+
+from __future__ import annotations
+
+import json
+import time
+from dataclasses import dataclass, field
+from typing import Any
+
+import structlog
+from anthropic import Anthropic
+
+from src.config.settings import settings
+from src.engine.transcriber import transcribe
+from src.engine.vision import analyze_from_storage
+from src.engine.video import process_video
+from src.engine.transcriber import transcribe_bytes
+
+logger = structlog.get_logger(__name__)
+
+
+@dataclass
+class VisitSegment:
+    """A single identified visit within a session."""
+    segment_id: str
+    inferred_location: str
+    visit_type: str  # ferreteria / obra_civil / obra_pequeña
+    confidence: float
+    files: list[str]
+    time_range: str
+    transcriptions: dict[str, str] = field(default_factory=dict)
+    image_descriptions: dict[str, str] = field(default_factory=dict)
+    text_notes: list[str] = field(default_factory=list)
+
+
+@dataclass
+class SegmentationResult:
+    """Result of Phase 1 segmentation."""
+    visits: list[VisitSegment] = field(default_factory=list)
+    unassigned_files: list[str] = field(default_factory=list)
+    needs_clarification: bool = False
+    clarification_message: str = ""
+    raw_json: dict[str, Any] = field(default_factory=dict)
+    elapsed_ms: int = 0
+
+
+SEGMENTATION_SCHEMA = """{
+  "sessions": [
+    {
+      "id": "session-1",
+      "inferred_location": "Nombre/ubicación del punto visitado",
+      "visit_type": "ferreteria | obra_civil | obra_pequeña",
+      "confidence": 0.92,
+      "files": ["archivo1.jpg", "audio1.ogg"],
+      "time_range": "10:15 - 10:52"
+    }
+  ],
+  "unassigned_files": [],
+  "needs_clarification": false,
+  "clarification_message": ""
+}"""
+
+
+async def segment_session(session: dict[str, Any]) -> SegmentationResult:
+    """Analyze all files in a session and identify distinct visits.
+
+    Steps:
+    1. Transcribe all audio files
+    2. Analyze all images with vision
+    3. Process any videos (extract frames + audio)
+    4. Build consolidated context
+    5. Call Claude Sonnet to segment into visits
+    """
+    start = time.time()
+    session_id = session["id"]
+    raw_files: list[dict[str, Any]] = session.get("raw_files", [])
+    logger.info("segmenter_start", session_id=session_id, file_count=len(raw_files))
+
+    # Collect transcriptions and image descriptions
+    transcriptions: dict[str, str] = {}
+    image_descriptions: dict[str, str] = {}
+    text_notes: list[dict[str, str]] = []
+
+    for file_entry in raw_files:
+        filename = file_entry.get("filename", "unknown")
+        file_type = file_entry.get("type", "unknown")
+        storage_path = file_entry.get("storage_path")
+        timestamp = file_entry.get("timestamp", "")
+
+        if file_type == "audio" and storage_path:
+            logger.info("segmenter_transcribing", filename=filename)
+            text = await transcribe(storage_path)
+            if text:
+                transcriptions[filename] = text
+
+        elif file_type == "image" and storage_path:
+            logger.info("segmenter_analyzing_image", filename=filename)
+            desc = await analyze_from_storage(storage_path)
+            if desc:
+                image_descriptions[filename] = desc
+
+        elif file_type == "video" and storage_path:
+            logger.info("segmenter_processing_video", filename=filename)
+            video_result = await process_video(storage_path)
+            # Transcribe extracted audio
+            if video_result.audio_bytes:
+                text = await transcribe_bytes(video_result.audio_bytes)
+                if text:
+                    transcriptions[f"{filename}_audio"] = text
+            # Analyze frames
+            for idx, frame in enumerate(video_result.frames):
+                desc = f"[Frame {idx+1} de video {filename}]"
+                from src.engine.vision import analyze_image
+                frame_desc = await analyze_image(frame, context="frame de video de visita de campo")
+                image_descriptions[f"{filename}_frame{idx+1}"] = frame_desc
+
+        elif file_type == "text":
+            body = file_entry.get("body", "")
+            if body:
+                text_notes.append({"timestamp": timestamp, "text": body})
+
+    # Build consolidated context for Claude
+    context_parts: list[str] = []
+
+    for filename, text in transcriptions.items():
+        ts = _find_timestamp(raw_files, filename)
+        context_parts.append(f"[Audio: {filename} | {ts}]\n{text}\n")
+
+    for filename, desc in image_descriptions.items():
+        ts = _find_timestamp(raw_files, filename)
+        context_parts.append(f"[Imagen: {filename} | {ts}]\n{desc}\n")
+
+    for note in text_notes:
+        context_parts.append(f"[Texto: {note['timestamp']}]\n{note['text']}\n")
+
+    consolidated_context = "\n".join(context_parts)
+
+    if not consolidated_context.strip():
+        logger.warning("segmenter_empty_context", session_id=session_id)
+        return SegmentationResult(
+            needs_clarification=True,
+            clarification_message="No pude procesar ningún archivo de la sesión. Intenta enviar los archivos de nuevo.",
+            elapsed_ms=int((time.time() - start) * 1000),
+        )
+
+    # Call Claude Sonnet to segment
+    logger.info("segmenter_calling_claude", context_chars=len(consolidated_context))
+
+    all_filenames = [f.get("filename", "unknown") for f in raw_files]
+
+    prompt = f"""Eres un analista que debe identificar cuántas visitas de campo distintas
+hay en este conjunto de capturas enviadas por un ejecutivo de Argos.
+
+Una visita = un punto físico visitado (ferretería, obra civil, o obra pequeña).
+
+Archivos disponibles: {json.dumps(all_filenames, ensure_ascii=False)}
+
+Contexto capturado durante el día:
+{consolidated_context}
+
+Identifica:
+1. Cuántas visitas distintas hay
+2. Qué archivos pertenecen a cada visita
+3. El tipo de cada visita (ferreteria/obra_civil/obra_pequeña)
+4. El nombre/ubicación inferida de cada punto
+5. Tu nivel de confianza (0-1) para cada agrupación
+6. Si hay archivos que no puedes asignar con confianza
+
+Responde SOLO en JSON siguiendo este schema exacto:
+{SEGMENTATION_SCHEMA}
+
+Si alguna visita tiene confidence < 0.75 o hay archivos sin asignar, pon needs_clarification: true
+y en clarification_message explica qué necesitas saber del ejecutivo."""
+
+    try:
+        client = Anthropic(api_key=settings.anthropic_api_key)
+        message = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=2048,
+            messages=[{"role": "user", "content": prompt}],
+        )
+
+        response_text = message.content[0].text.strip()
+
+        # Parse JSON — handle potential markdown wrapping
+        json_text = response_text
+        if "```json" in json_text:
+            json_text = json_text.split("```json")[1].split("```")[0].strip()
+        elif "```" in json_text:
+            json_text = json_text.split("```")[1].split("```")[0].strip()
+
+        segmentation_data = json.loads(json_text)
+
+    except json.JSONDecodeError as e:
+        logger.error("segmenter_json_parse_failed", error=str(e), response=response_text[:200])
+        return SegmentationResult(
+            needs_clarification=True,
+            clarification_message="Error interno procesando la segmentación. Intenta de nuevo.",
+            elapsed_ms=int((time.time() - start) * 1000),
+        )
+    except Exception as e:
+        logger.error("segmenter_claude_failed", error=str(e))
+        return SegmentationResult(
+            needs_clarification=True,
+            clarification_message=f"Error procesando: {e}",
+            elapsed_ms=int((time.time() - start) * 1000),
+        )
+
+    # Build VisitSegment objects
+    visits: list[VisitSegment] = []
+    for seg in segmentation_data.get("sessions", []):
+        visit = VisitSegment(
+            segment_id=seg.get("id", ""),
+            inferred_location=seg.get("inferred_location", "Desconocido"),
+            visit_type=seg.get("visit_type", "ferreteria"),
+            confidence=seg.get("confidence", 0.0),
+            files=seg.get("files", []),
+            time_range=seg.get("time_range", ""),
+        )
+
+        # Attach transcriptions and descriptions for this visit's files
+        for fname in visit.files:
+            if fname in transcriptions:
+                visit.transcriptions[fname] = transcriptions[fname]
+            if fname in image_descriptions:
+                visit.image_descriptions[fname] = image_descriptions[fname]
+
+        # Also attach text notes (they apply to all visits for now)
+        visit.text_notes = [n["text"] for n in text_notes]
+
+        visits.append(visit)
+
+    elapsed_ms = int((time.time() - start) * 1000)
+
+    result = SegmentationResult(
+        visits=visits,
+        unassigned_files=segmentation_data.get("unassigned_files", []),
+        needs_clarification=segmentation_data.get("needs_clarification", False),
+        clarification_message=segmentation_data.get("clarification_message", ""),
+        raw_json=segmentation_data,
+        elapsed_ms=elapsed_ms,
+    )
+
+    logger.info(
+        "segmenter_complete",
+        visits=len(visits),
+        unassigned=len(result.unassigned_files),
+        needs_clarification=result.needs_clarification,
+        elapsed_ms=elapsed_ms,
+    )
+
+    return result
+
+
+def _find_timestamp(raw_files: list[dict[str, Any]], filename: str) -> str:
+    """Find the timestamp for a file in raw_files list."""
+    for f in raw_files:
+        if f.get("filename") == filename:
+            return f.get("timestamp", "")
+    return ""

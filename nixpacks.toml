@@ -1,0 +1,2 @@
+[phases.setup]
+nixPkgs = ["ffmpeg", "pango", "gobject-introspection", "glib", "harfbuzz", "fontconfig", "freetype"]

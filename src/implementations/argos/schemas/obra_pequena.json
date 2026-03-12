@@ -1,0 +1,62 @@
+{
+  "implementation": "argos",
+  "visit_type": "obra_pequeña",
+  "display_name": "Visita a Obra Pequeña",
+  "description": "Visita a obras pequeñas: maestro de obra, producto en uso, canal de decisión",
+  "primary_media": ["voice", "image"],
+  "categories": [
+    {
+      "id": "datos_maestro",
+      "label": "Datos del maestro de obra",
+      "description": "Información del maestro o encargado de la obra pequeña",
+      "fields": [
+        { "id": "nombre", "type": "string", "label": "Nombre del maestro/encargado" },
+        { "id": "telefono", "type": "string", "label": "Teléfono" },
+        { "id": "experiencia", "type": "string", "label": "Años de experiencia estimados" },
+        { "id": "zona", "type": "string", "label": "Zona/barrio donde trabaja habitualmente" }
+      ],
+      "is_array": false,
+      "applies_to": ["voice", "text"]
+    },
+    {
+      "id": "producto_actual",
+      "label": "Producto en uso",
+      "description": "Qué cemento/materiales Argos o competencia está usando",
+      "fields": [
+        { "id": "marca", "type": "string", "label": "Marca en uso" },
+        { "id": "producto", "type": "string", "label": "Producto/referencia" },
+        { "id": "razon_uso", "type": "string", "label": "Por qué usa esa marca (precio/calidad/disponibilidad)" },
+        { "id": "frecuencia_compra", "type": "string", "label": "Frecuencia de compra (semanal/quincenal/por obra)" }
+      ],
+      "is_array": true,
+      "applies_to": ["voice", "image"]
+    },
+    {
+      "id": "canal_decision",
+      "label": "Canal de decisión de compra",
+      "description": "Dónde y cómo decide qué cemento comprar",
+      "fields": [
+        { "id": "donde_compra", "type": "string", "label": "Punto de compra habitual (ferretería, distribuidor)" },
+        { "id": "quien_decide", "type": "string", "label": "Quién decide la marca (maestro/dueño/ingeniero)" },
+        { "id": "influencia", "type": "string", "label": "Factor más influyente (precio/disponibilidad/costumbre/recomendación)" }
+      ],
+      "is_array": false,
+      "applies_to": ["voice", "text"]
+    },
+    {
+      "id": "oportunidad_conversion",
+      "label": "Oportunidad de conversión",
+      "description": "Posibilidad de convertir al maestro a productos Argos",
+      "fields": [
+        { "id": "probabilidad", "type": "string", "label": "Probabilidad (alta/media/baja)" },
+        { "id": "barrera", "type": "string", "label": "Principal barrera para el cambio" },
+        { "id": "incentivo", "type": "string", "label": "Qué lo motivaría a cambiar" },
+        { "id": "accion_siguiente", "type": "string", "label": "Acción de seguimiento recomendada" }
+      ],
+      "is_array": false,
+      "applies_to": ["voice", "text"]
+    }
+  ],
+  "confidence_threshold": 0.7,
+  "sheets_tab": "Obras Pequeñas"
+}

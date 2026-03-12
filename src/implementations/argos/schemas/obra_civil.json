@@ -1,0 +1,63 @@
+{
+  "implementation": "argos",
+  "visit_type": "obra_civil",
+  "display_name": "Visita a Obra Civil Grande",
+  "description": "Inspección de obra civil: datos del proyecto, proveedor, oportunidades comerciales",
+  "primary_media": ["image", "voice"],
+  "categories": [
+    {
+      "id": "datos_proyecto",
+      "label": "Datos del proyecto",
+      "description": "Información general de la obra: nombre, ubicación, etapa, tamaño estimado",
+      "fields": [
+        { "id": "nombre_proyecto", "type": "string", "label": "Nombre de la obra/proyecto" },
+        { "id": "ubicacion", "type": "string", "label": "Ubicación (ciudad, barrio, dirección)" },
+        { "id": "etapa", "type": "string", "label": "Etapa (excavación/cimentación/estructura/acabados)" },
+        { "id": "tamano_estimado", "type": "string", "label": "Tamaño estimado (m², pisos, unidades)" }
+      ],
+      "is_array": false,
+      "applies_to": ["image", "voice", "text"]
+    },
+    {
+      "id": "proveedor_actual",
+      "label": "Proveedor actual de cemento",
+      "description": "Qué marca(s) de cemento están usando actualmente en la obra",
+      "fields": [
+        { "id": "marca", "type": "string", "label": "Marca de cemento en uso" },
+        { "id": "producto", "type": "string", "label": "Producto/referencia específica" },
+        { "id": "volumen_estimado", "type": "string", "label": "Volumen estimado (bultos/mes, m³)" },
+        { "id": "satisfaccion", "type": "string", "label": "Satisfacción con proveedor actual (alta/media/baja)" }
+      ],
+      "is_array": true,
+      "applies_to": ["image", "voice"]
+    },
+    {
+      "id": "oportunidad",
+      "label": "Oportunidad comercial",
+      "description": "Oportunidades para Argos: conversión, venta cruzada, nuevos productos",
+      "fields": [
+        { "id": "tipo", "type": "string", "label": "Tipo (conversión/upsell/nuevo producto/servicio)" },
+        { "id": "descripcion", "type": "string", "label": "Descripción de la oportunidad" },
+        { "id": "urgencia", "type": "string", "label": "Urgencia (alta/media/baja)" },
+        { "id": "valor_estimado", "type": "string", "label": "Valor estimado (COP)" }
+      ],
+      "is_array": true,
+      "applies_to": ["voice", "text"]
+    },
+    {
+      "id": "contacto_clave",
+      "label": "Contacto clave",
+      "description": "Persona de decisión en la obra con quien se tuvo interacción",
+      "fields": [
+        { "id": "nombre", "type": "string", "label": "Nombre" },
+        { "id": "cargo", "type": "string", "label": "Cargo (ingeniero residente, maestro, comprador)" },
+        { "id": "telefono", "type": "string", "label": "Teléfono (si lo compartió)" },
+        { "id": "notas", "type": "string", "label": "Notas de la conversación" }
+      ],
+      "is_array": false,
+      "applies_to": ["voice", "text"]
+    }
+  ],
+  "confidence_threshold": 0.7,
+  "sheets_tab": "Obras Civiles"
+}

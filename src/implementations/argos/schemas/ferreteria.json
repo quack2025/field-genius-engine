@@ -1,0 +1,61 @@
+{
+  "implementation": "argos",
+  "visit_type": "ferreteria",
+  "display_name": "Visita a Ferretería",
+  "description": "Auditoría de punto de venta: precios, exhibición, competencia",
+  "primary_media": ["image", "voice"],
+  "categories": [
+    {
+      "id": "precios",
+      "label": "Precios capturados",
+      "description": "Precios de productos Argos y competencia visibles en fotos o mencionados en audio",
+      "fields": [
+        { "id": "producto", "type": "string", "label": "Producto/referencia" },
+        { "id": "marca", "type": "string", "label": "Marca" },
+        { "id": "precio", "type": "number", "label": "Precio COP" },
+        { "id": "presentacion", "type": "string", "label": "Presentación (ej: bolsa 50kg)" }
+      ],
+      "is_array": true,
+      "applies_to": ["image", "voice"]
+    },
+    {
+      "id": "share_of_shelf",
+      "label": "Espacio en góndola",
+      "description": "Proporción de espacio visual de Argos vs competencia en el punto de venta",
+      "fields": [
+        { "id": "argos_facing", "type": "string", "label": "Espacio Argos (alto/medio/bajo)" },
+        { "id": "competencia_dominante", "type": "string", "label": "Marca con más espacio" },
+        { "id": "notas", "type": "string", "label": "Observaciones" }
+      ],
+      "is_array": false,
+      "applies_to": ["image"]
+    },
+    {
+      "id": "actividad_competencia",
+      "label": "Actividad de competencia",
+      "description": "Acciones comerciales, promociones o novedades de marcas competidoras detectadas",
+      "fields": [
+        { "id": "marca", "type": "string", "label": "Marca competidora" },
+        { "id": "actividad", "type": "string", "label": "Descripción (promo, descuento, nuevo producto)" },
+        { "id": "alerta", "type": "boolean", "label": "¿Requiere atención urgente?" }
+      ],
+      "is_array": true,
+      "applies_to": ["image", "voice", "text"]
+    },
+    {
+      "id": "relacion_comercial",
+      "label": "Relación con el punto",
+      "description": "Información sobre la relación comercial con el ferretero y oportunidades detectadas",
+      "fields": [
+        { "id": "nombre_contacto", "type": "string", "label": "Nombre del ferretero/contacto" },
+        { "id": "satisfaccion", "type": "string", "label": "Percepción general (positiva/neutral/negativa)" },
+        { "id": "oportunidad", "type": "string", "label": "Oportunidad de negocio detectada" },
+        { "id": "seguimiento", "type": "string", "label": "Acción de seguimiento recomendada" }
+      ],
+      "is_array": false,
+      "applies_to": ["voice", "text"]
+    }
+  ],
+  "confidence_threshold": 0.7,
+  "sheets_tab": "Ferreterías"
+}

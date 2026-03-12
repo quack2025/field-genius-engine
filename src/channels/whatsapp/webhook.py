@@ -1,0 +1,126 @@
+"""Twilio WhatsApp webhook — receives incoming messages via POST."""
+
+from __future__ import annotations
+
+import hashlib
+import hmac
+from urllib.parse import urlencode
+
+import structlog
+from fastapi import APIRouter, Request, Response
+
+from src.config.settings import settings
+from src.channels.whatsapp.session_manager import handle_media, handle_text
+from src.channels.whatsapp.sender import send_message
+from src.engine.media_downloader import download_and_store
+
+logger = structlog.get_logger(__name__)
+
+router = APIRouter(tags=["webhook"])
+
+
+def validate_twilio_signature(url: str, params: dict, signature: str) -> bool:
+    """Validate X-Twilio-Signature HMAC to verify request authenticity."""
+    if not settings.twilio_auth_token:
+        logger.warning("twilio_auth_token_missing", msg="Skipping signature validation")
+        return True
+
+    # Build the data string: URL + sorted POST params concatenated
+    data = url
+    for key in sorted(params.keys()):
+        data += key + params[key]
+
+    expected = hmac.new(
+        settings.twilio_auth_token.encode("utf-8"),
+        data.encode("utf-8"),
+        hashlib.sha1,
+    ).digest()
+
+    import base64
+    expected_b64 = base64.b64encode(expected).decode("utf-8")
+
+    return hmac.compare_digest(expected_b64, signature)
+
+
+@router.post("/webhook/whatsapp")
+async def twilio_webhook(request: Request) -> Response:
+    """Handle incoming Twilio WhatsApp messages.
+
+    Twilio sends form-encoded POST with fields like:
+    - From: whatsapp:+573001234567
+    - Body: text message
+    - NumMedia: number of media attachments
+    - MediaUrl0, MediaContentType0, etc.
+    """
+    form = await request.form()
+    params = {k: str(v) for k, v in form.items()}
+
+    # Validate Twilio signature
+    signature = request.headers.get("X-Twilio-Signature", "")
+    request_url = str(request.url)
+    if not validate_twilio_signature(request_url, params, signature):
+        logger.warning("twilio_signature_invalid")
+        return Response(content="Forbidden", status_code=403)
+
+    from_phone = params.get("From", "")  # whatsapp:+573001234567
+    body = params.get("Body", "").strip()
+    num_media = int(params.get("NumMedia", "0"))
+
+    # Strip 'whatsapp:' prefix for internal use
+    phone = from_phone.replace("whatsapp:", "")
+
+    logger.info(
+        "webhook_received",
+        phone=phone,
+        body=body[:50] if body else "",
+        num_media=num_media,
+    )
+
+    # Process media attachments
+    for i in range(num_media):
+        media_url = params.get(f"MediaUrl{i}", "")
+        content_type = params.get(f"MediaContentType{i}", "application/octet-stream")
+
+        if not media_url:
+            continue
+
+        try:
+            # Get or create session first to get session_id
+            import datetime
+            from src.engine.supabase_client import get_or_create_session
+
+            session = await get_or_create_session(phone, datetime.date.today())
+
+            # Download media and upload to Supabase Storage
+            file_meta = await download_and_store(
+                media_url=media_url,
+                content_type=content_type,
+                session_id=session["id"],
+                user_phone=phone,
+            )
+
+            # Add file to session
+            await handle_media(phone, file_meta)
+
+            # Acknowledge receipt
+            await send_message(from_phone, "Recibido")
+
+        except Exception as e:
+            logger.error("media_processing_failed", phone=phone, error=str(e))
+
+    # Process text body (if any, and not just media caption)
+    if body and num_media == 0:
+        result = await handle_text(phone, body)
+
+        if result["action"] == "trigger":
+            await send_message(from_phone, result["message"])
+            # TODO Sprint 3: kick off pipeline processing here
+        elif result["action"] == "empty_session":
+            await send_message(from_phone, result["message"])
+        elif result["action"] == "text_added":
+            # Silent acknowledgment for text notes
+            pass
+
+    # Return empty TwiML response (Twilio expects XML)
+    twiml = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
+    return Response(content=twiml, media_type="application/xml")
