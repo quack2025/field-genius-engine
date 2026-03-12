@@ -55,9 +55,13 @@ async def twilio_webhook(request: Request) -> Response:
     form = await request.form()
     params = {k: str(v) for k, v in form.items()}
 
-    # Validate Twilio signature
+    # Validate Twilio signature — reconstruct public URL from proxy headers
+    # Behind Railway proxy, request.url is http://0.0.0.0:8080/... but Twilio
+    # signed with the public https:// URL
     signature = request.headers.get("X-Twilio-Signature", "")
-    request_url = str(request.url)
+    proto = request.headers.get("X-Forwarded-Proto", request.url.scheme)
+    host = request.headers.get("Host", request.url.netloc)
+    request_url = f"{proto}://{host}{request.url.path}"
     if not validate_twilio_signature(request_url, params, signature):
         logger.warning("twilio_signature_invalid")
         return Response(content="Forbidden", status_code=403)
