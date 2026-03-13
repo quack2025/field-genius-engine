@@ -22,6 +22,8 @@ app.add_middleware(
         "http://localhost:5173",
         "http://localhost:3000",
         "https://field-genius-backoffice.vercel.app",
+        "https://xponencial.net",
+        "https://www.xponencial.net",
     ],
     allow_credentials=True,
     allow_methods=["*"],
