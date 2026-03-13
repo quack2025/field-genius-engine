@@ -1,9 +1,17 @@
-"""Seed Eficacia implementation with visit type schemas."""
+"""Seed Eficacia implementation with visit type schemas.
+
+Usage: SUPABASE_SERVICE_ROLE_KEY=<key> python scripts/seed_eficacia.py
+"""
 import json
+import os
+import sys
 import urllib.request
 
-SUPABASE_URL = "https://sglvhzmwfzetyrhwouiw.supabase.co"
-KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNnbHZoem13ZnpldHlyaHdvdWl3Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3MzI5NTM4NCwiZXhwIjoyMDg4ODcxMzg0fQ.1sIsGIFdyOlrSFhQnr837oowpcTcItCSfsy3E_JM23k"
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://sglvhzmwfzetyrhwouiw.supabase.co")
+KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+if not KEY:
+    print("ERROR: Set SUPABASE_SERVICE_ROLE_KEY env var before running this script.")
+    sys.exit(1)
 
 
 def sb_post(table, data):
