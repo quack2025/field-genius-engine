@@ -56,7 +56,11 @@ async def get_or_create_session(
     # Look up user name and implementation
     user = await get_user_by_phone(phone)
     user_name = user["name"] if user else phone
-    impl_id = user.get("implementation", "argos") if user else "argos"
+    impl_id = (
+        user.get("implementation", settings.default_implementation)
+        if user
+        else settings.default_implementation
+    )
 
     # Create new session with implementation from user record
     new_session = {

@@ -42,7 +42,7 @@ def _get_sheets_client() -> gspread.Client | None:
         return None
 
 
-async def _load_schema(visit_type: str, implementation: str = "argos") -> dict[str, Any]:
+async def _load_schema(visit_type: str, implementation: str = "") -> dict[str, Any]:
     """Load schema JSON for a visit type via ConfigLoader (DB-first, file-fallback)."""
     from src.engine.config_loader import get_visit_type_schema
     return await get_visit_type_schema(implementation, visit_type)
@@ -109,7 +109,7 @@ def _flatten_visit(
 async def write_visit_report(
     report: dict[str, Any],
     session: dict[str, Any],
-    implementation: str = "argos",
+    implementation: str = "",
 ) -> str | None:
     """Write a visit report to Google Sheets. Returns the sheet tab name or None on failure.
 

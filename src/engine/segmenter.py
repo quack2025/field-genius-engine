@@ -51,7 +51,7 @@ def _build_segmentation_schema(visit_type_options: str) -> str:
 
 async def segment_session(
     session: dict[str, Any],
-    implementation: str = "argos",
+    implementation: str = "",
 ) -> SegmentationResult:
     """Analyze all files in a session and identify distinct visits.
 

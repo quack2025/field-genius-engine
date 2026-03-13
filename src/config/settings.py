@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     gamma_api_key: str | None = None
 
     # Config
-    default_implementation: str = "argos"
+    default_implementation: str = "eficacia"
     default_language: str = "es"
 
     model_config = {

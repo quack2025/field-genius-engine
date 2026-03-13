@@ -30,7 +30,7 @@ class ExtractedVisit:
     elapsed_ms: int = 0
 
 
-async def _load_schema(visit_type: str, implementation: str = "argos") -> dict[str, Any]:
+async def _load_schema(visit_type: str, implementation: str = "") -> dict[str, Any]:
     """Load the JSON schema for a visit type via ConfigLoader (DB-first, file-fallback)."""
     from src.engine.config_loader import get_visit_type_schema
     return await get_visit_type_schema(implementation, visit_type)
@@ -38,7 +38,7 @@ async def _load_schema(visit_type: str, implementation: str = "argos") -> dict[s
 
 async def extract_visit(
     visit: VisitSegment,
-    implementation: str = "argos",
+    implementation: str = "",
 ) -> ExtractedVisit:
     """Extract structured data from a visit segment using the appropriate schema.
 

@@ -10,6 +10,7 @@ from typing import Any
 
 import structlog
 
+from src.config.settings import settings
 from src.engine.segmenter import segment_session, SegmentationResult, VisitSegment
 from src.engine.extractor import extract_visit, ExtractedVisit
 from src.engine.supabase_client import (
@@ -152,7 +153,7 @@ async def process_session(session_id: str) -> PipelineResult:
         logger.info("pipeline_session_loaded", files=len(raw_files), phone=session["user_phone"])
 
         # Step 2: Phase 1 — Segmentation
-        implementation = session.get("implementation", "argos")
+        implementation = session.get("implementation", settings.default_implementation)
         await update_session_status(session_id, "segmenting")
         logger.info("pipeline_phase1_start")
 
@@ -389,13 +390,13 @@ async def resume_after_clarification(
 
                 if file_type == "image" and storage_path:
                     from src.engine.vision import analyze_from_storage
-                    implementation = session.get("implementation", "argos")
+                    implementation = session.get("implementation", settings.default_implementation)
                     desc = await analyze_from_storage(storage_path, implementation=implementation)
                     visit.image_descriptions[filename] = desc
 
         # Phase 2: Extraction
         await update_session_status(session_id, "processing")
-        implementation = session.get("implementation", "argos")
+        implementation = session.get("implementation", settings.default_implementation)
         report_data_list: list[dict[str, Any]] = []
 
         for i, visit in enumerate(visits):

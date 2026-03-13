@@ -19,7 +19,7 @@ logger = structlog.get_logger(__name__)
 async def analyze_image(
     image_bytes: bytes,
     context: str = "",
-    implementation: str = "argos",
+    implementation: str = "",
 ) -> str:
     """Analyze a single image using Claude Sonnet vision.
 
@@ -86,7 +86,7 @@ async def analyze_image(
 async def analyze_images_batch(
     images: list[bytes],
     context: str = "",
-    implementation: str = "argos",
+    implementation: str = "",
 ) -> list[str]:
     """Analyze multiple images in parallel using asyncio.gather."""
     start = time.time()
@@ -111,7 +111,7 @@ async def analyze_images_batch(
 async def analyze_from_storage(
     storage_path: str,
     context: str = "",
-    implementation: str = "argos",
+    implementation: str = "",
 ) -> str:
     """Download image from Supabase Storage and analyze it."""
     sb = get_client()
