@@ -30,26 +30,10 @@ class ExtractedVisit:
     elapsed_ms: int = 0
 
 
-def _load_schema(visit_type: str, implementation: str = "argos") -> dict[str, Any]:
-    """Load the JSON schema for a visit type from implementations."""
-    # Map visit_type to filename
-    type_to_file = {
-        "ferreteria": "ferreteria.json",
-        "obra_civil": "obra_civil.json",
-        "obra_pequeña": "obra_pequena.json",
-        "obra_pequena": "obra_pequena.json",
-    }
-
-    filename = type_to_file.get(visit_type, "ferreteria.json")
-    schema_path = f"src/implementations/{implementation}/schemas/{filename}"
-
-    try:
-        with open(schema_path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except FileNotFoundError:
-        logger.warning("schema_not_found", path=schema_path, fallback="ferreteria.json")
-        with open(f"src/implementations/{implementation}/schemas/ferreteria.json", "r", encoding="utf-8") as f:
-            return json.load(f)
+async def _load_schema(visit_type: str, implementation: str = "argos") -> dict[str, Any]:
+    """Load the JSON schema for a visit type via ConfigLoader (DB-first, file-fallback)."""
+    from src.engine.config_loader import get_visit_type_schema
+    return await get_visit_type_schema(implementation, visit_type)
 
 
 async def extract_visit(
@@ -74,7 +58,7 @@ async def extract_visit(
     )
 
     # Step 1: Load schema
-    schema = _load_schema(visit.visit_type, implementation)
+    schema = await _load_schema(visit.visit_type, implementation)
 
     # Step 2: Generate system prompt
     system_prompt = build_system_prompt(schema)

@@ -16,6 +16,7 @@ logger = structlog.get_logger(__name__)
 def build_gamma_prompt(
     reports: list[dict[str, Any]],
     session: dict[str, Any],
+    implementation_name: str = "",
 ) -> str:
     """Mode A: Generate a structured super prompt for Gamma.
 
@@ -25,6 +26,7 @@ def build_gamma_prompt(
     user_name = session.get("user_name", "Ejecutivo")
     date_str = session.get("date", str(datetime.date.today()))
     num_visits = len(reports)
+    impl_label = implementation_name or session.get("implementation", "")
 
     sections: list[str] = []
 
@@ -32,7 +34,7 @@ def build_gamma_prompt(
     sections.append(f"""# Reporte de Campo — {user_name}
 **Fecha:** {date_str}
 **Visitas realizadas:** {num_visits}
-**Implementación:** Argos — Visitas de campo
+**Implementacion:** {impl_label} — Visitas de campo
 """)
 
     # Executive summary

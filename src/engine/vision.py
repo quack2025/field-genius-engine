@@ -15,44 +15,12 @@ from src.engine.supabase_client import get_client
 
 logger = structlog.get_logger(__name__)
 
-VISION_SYSTEM_PROMPT = """Eres un analista de campo experto para Argos (empresa de cementos colombiana).
-Analiza esta imagen de un punto de venta con ojo de auditor comercial.
 
-Describe en detalle lo que observas, organizado en estas dimensiones:
-
-1. TIPO DE TOMA: ¿Es exterior (fachada), interior (góndola/mostrador), o detalle (producto/precio)?
-
-2. PRESENCIA INSTITUCIONAL ARGOS:
-   - ¿Hay logos, avisos o letreros de Argos en fachada o interior?
-   - ¿Hay material POP de Argos? (banners, cenefas, exhibidores, stickers)
-   - ¿Es distribuidor oficial o punto independiente?
-
-3. PRESENCIA DE PRODUCTO ARGOS:
-   - ¿Hay producto físico Argos visible? (sacos de cemento, mortero, pegante, concreto)
-   - ¿Cuánto espacio ocupa vs competencia?
-   - ALERTA: Si hay presencia institucional (aviso/logo) pero NO hay producto visible, marcarlo explícitamente.
-
-4. PRODUCTOS Y PRECIOS:
-   - Productos visibles (marcas, referencias, presentaciones)
-   - Precios visibles (etiquetas, letreros)
-   - Organizar por categoría: cemento, mortero, pintura, acabados, herramientas, etc.
-
-5. COMPETENCIA:
-   - Marcas competidoras presentes y en qué categorías
-   - Promociones o material POP de competidores
-   - Marca dominante en espacio visual
-
-6. PERFIL DEL PUNTO:
-   - Categorías que maneja (cemento, pintura, acabados, ferretería general, plomería, eléctrico)
-   - Nivel de surtido y organización (alto/medio/bajo)
-   - Señales de actividad comercial (materiales afuera, clientes, entregas, obra cercana)
-   - Tamaño estimado del punto (pequeño/mediano/grande)
-
-Sé específico y objetivo. Si no puedes ver algo claramente, dilo.
-Responde en español, en párrafos cortos y concretos."""
-
-
-async def analyze_image(image_bytes: bytes, context: str = "") -> str:
+async def analyze_image(
+    image_bytes: bytes,
+    context: str = "",
+    implementation: str = "argos",
+) -> str:
     """Analyze a single image using Claude Sonnet vision.
 
     Args:
@@ -66,6 +34,10 @@ async def analyze_image(image_bytes: bytes, context: str = "") -> str:
     logger.info("vision_analyze_start", size=len(image_bytes), context=context[:50] if context else "")
 
     try:
+        # Load vision prompt from implementation config
+        from src.engine.config_loader import get_vision_prompt
+        vision_prompt = await get_vision_prompt(implementation)
+
         client = Anthropic(api_key=settings.anthropic_api_key, timeout=90.0)
 
         # Encode image to base64
@@ -82,7 +54,7 @@ async def analyze_image(image_bytes: bytes, context: str = "") -> str:
         message = client.messages.create(
             model="claude-sonnet-4-20250514",
             max_tokens=1024,
-            system=VISION_SYSTEM_PROMPT,
+            system=vision_prompt,
             messages=[
                 {
                     "role": "user",
@@ -114,12 +86,13 @@ async def analyze_image(image_bytes: bytes, context: str = "") -> str:
 async def analyze_images_batch(
     images: list[bytes],
     context: str = "",
+    implementation: str = "argos",
 ) -> list[str]:
     """Analyze multiple images in parallel using asyncio.gather."""
     start = time.time()
     logger.info("vision_batch_start", count=len(images))
 
-    tasks = [analyze_image(img, context) for img in images]
+    tasks = [analyze_image(img, context, implementation) for img in images]
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
     descriptions: list[str] = []
@@ -135,11 +108,15 @@ async def analyze_images_batch(
     return descriptions
 
 
-async def analyze_from_storage(storage_path: str, context: str = "") -> str:
+async def analyze_from_storage(
+    storage_path: str,
+    context: str = "",
+    implementation: str = "argos",
+) -> str:
     """Download image from Supabase Storage and analyze it."""
     sb = get_client()
     image_bytes = sb.storage.from_("media").download(storage_path)
-    return await analyze_image(image_bytes, context)
+    return await analyze_image(image_bytes, context, implementation)
 
 
 def _detect_media_type(image_bytes: bytes) -> str:

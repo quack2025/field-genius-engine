@@ -152,10 +152,11 @@ async def process_session(session_id: str) -> PipelineResult:
         logger.info("pipeline_session_loaded", files=len(raw_files), phone=session["user_phone"])
 
         # Step 2: Phase 1 — Segmentation
+        implementation = session.get("implementation", "argos")
         await update_session_status(session_id, "segmenting")
         logger.info("pipeline_phase1_start")
 
-        segmentation = await segment_session(session)
+        segmentation = await segment_session(session, implementation=implementation)
         result.segmentation = segmentation
 
         logger.info(
@@ -197,7 +198,6 @@ async def process_session(session_id: str) -> PipelineResult:
         await update_session_status(session_id, "processing")
         logger.info("pipeline_phase2_start", visits=len(segmentation.visits))
 
-        implementation = session.get("implementation", "argos")
         report_data_list: list[dict[str, Any]] = []
 
         for i, visit in enumerate(segmentation.visits):
@@ -389,7 +389,8 @@ async def resume_after_clarification(
 
                 if file_type == "image" and storage_path:
                     from src.engine.vision import analyze_from_storage
-                    desc = await analyze_from_storage(storage_path)
+                    implementation = session.get("implementation", "argos")
+                    desc = await analyze_from_storage(storage_path, implementation=implementation)
                     visit.image_descriptions[filename] = desc
 
         # Phase 2: Extraction

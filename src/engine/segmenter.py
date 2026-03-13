@@ -44,24 +44,15 @@ class SegmentationResult:
     elapsed_ms: int = 0
 
 
-SEGMENTATION_SCHEMA = """{
-  "sessions": [
-    {
-      "id": "session-1",
-      "inferred_location": "Nombre/ubicación del punto visitado",
-      "visit_type": "ferreteria | obra_civil | obra_pequeña",
-      "confidence": 0.92,
-      "files": ["archivo1.jpg", "audio1.ogg"],
-      "time_range": "10:15 - 10:52"
-    }
-  ],
-  "unassigned_files": [],
-  "needs_clarification": false,
-  "clarification_message": ""
-}"""
+def _build_segmentation_schema(visit_type_options: str) -> str:
+    """Build the segmentation JSON schema with dynamic visit types."""
+    return f"""{{"sessions": [{{"id": "session-1", "inferred_location": "Nombre/ubicación del punto visitado", "visit_type": "{visit_type_options}", "confidence": 0.92, "files": ["archivo1.jpg", "audio1.ogg"], "time_range": "10:15 - 10:52"}}], "unassigned_files": [], "needs_clarification": false, "clarification_message": ""}}"""
 
 
-async def segment_session(session: dict[str, Any]) -> SegmentationResult:
+async def segment_session(
+    session: dict[str, Any],
+    implementation: str = "argos",
+) -> SegmentationResult:
     """Analyze all files in a session and identify distinct visits.
 
     Steps:
@@ -95,7 +86,7 @@ async def segment_session(session: dict[str, Any]) -> SegmentationResult:
 
         elif file_type == "image" and storage_path:
             logger.info("segmenter_analyzing_image", filename=filename)
-            desc = await analyze_from_storage(storage_path)
+            desc = await analyze_from_storage(storage_path, implementation=implementation)
             if desc:
                 image_descriptions[filename] = desc
 
@@ -111,7 +102,7 @@ async def segment_session(session: dict[str, Any]) -> SegmentationResult:
             for idx, frame in enumerate(video_result.frames):
                 desc = f"[Frame {idx+1} de video {filename}]"
                 from src.engine.vision import analyze_image
-                frame_desc = await analyze_image(frame, context="frame de video de visita de campo")
+                frame_desc = await analyze_image(frame, context="frame de video de visita de campo", implementation=implementation)
                 image_descriptions[f"{filename}_frame{idx+1}"] = frame_desc
 
         elif file_type == "text":
@@ -148,10 +139,30 @@ async def segment_session(session: dict[str, Any]) -> SegmentationResult:
 
     all_filenames = [f.get("filename", "unknown") for f in raw_files]
 
-    prompt = f"""Eres un analista que debe identificar cuántas visitas de campo distintas
-hay en este conjunto de capturas enviadas por un ejecutivo de Argos.
+    # Load implementation config for dynamic visit types and prompt
+    from src.engine.config_loader import get_implementation, get_visit_types
+    impl_config = await get_implementation(implementation)
+    visit_type_configs = await get_visit_types(implementation)
+    visit_type_slugs = [vt.slug for vt in visit_type_configs]
+    visit_type_options = " | ".join(visit_type_slugs)
 
-Una visita = un punto físico visitado (ferretería, obra civil, o obra pequeña).
+    segmentation_schema = _build_segmentation_schema(visit_type_options)
+
+    # Use custom template if available, otherwise build default prompt
+    if impl_config.segmentation_prompt_template:
+        prompt = impl_config.segmentation_prompt_template.format(
+            implementation_name=impl_config.name,
+            visit_type_options=visit_type_options,
+            filenames=json.dumps(all_filenames, ensure_ascii=False),
+            consolidated_context=consolidated_context,
+            segmentation_schema=segmentation_schema,
+        )
+    else:
+        prompt = f"""Eres un analista que debe identificar cuántas visitas de campo distintas
+hay en este conjunto de capturas enviadas por un representante de {impl_config.name}.
+
+Una visita = un punto físico visitado.
+Tipos de visita posibles: {visit_type_options}
 
 Archivos disponibles: {json.dumps(all_filenames, ensure_ascii=False)}
 
@@ -161,16 +172,16 @@ Contexto capturado durante el día:
 Identifica:
 1. Cuántas visitas distintas hay
 2. Qué archivos pertenecen a cada visita
-3. El tipo de cada visita (ferreteria/obra_civil/obra_pequeña)
+3. El tipo de cada visita ({visit_type_options})
 4. El nombre/ubicación inferida de cada punto
 5. Tu nivel de confianza (0-1) para cada agrupación
 6. Si hay archivos que no puedes asignar con confianza
 
 Responde SOLO en JSON siguiendo este schema exacto:
-{SEGMENTATION_SCHEMA}
+{segmentation_schema}
 
 Si alguna visita tiene confidence < 0.75 o hay archivos sin asignar, pon needs_clarification: true
-y en clarification_message explica qué necesitas saber del ejecutivo."""
+y en clarification_message explica qué necesitas saber."""
 
     try:
         client = Anthropic(api_key=settings.anthropic_api_key, timeout=90.0)

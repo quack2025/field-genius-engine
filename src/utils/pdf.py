@@ -1,4 +1,4 @@
-"""PDF report generator — WeasyPrint with HTML template for Argos managers."""
+"""PDF report generator — WeasyPrint with HTML template for field reports."""
 
 from __future__ import annotations
 
@@ -271,67 +271,43 @@ def build_whatsapp_summary(
         "",
     ]
 
+    META_FIELDS = {"confidence_score", "needs_clarification", "clarification_questions"}
+
     for i, r in enumerate(reports, 1):
         location = r.get("inferred_location", "Sin ubicacion")
+        visit_type = r.get("visit_type", "")
+        confidence = r.get("confidence_score", 0)
         extracted = r.get("extracted_data", {})
 
-        # Header with location
-        presencia = extracted.get("presencia_argos", {})
-        if isinstance(presencia, dict) and presencia.get("nivel_presencia"):
-            nivel = presencia["nivel_presencia"]
-            lines.append(f"{'='*30}")
-            lines.append(f"*{i}. {location}*")
-            lines.append(f"Presencia Argos: {nivel}")
-        else:
-            lines.append(f"{'='*30}")
-            lines.append(f"*{i}. {location}*")
+        lines.append(f"{'='*30}")
+        lines.append(f"*{i}. {location}* ({visit_type})")
+        if confidence:
+            lines.append(f"Confianza: {confidence:.0%}")
 
-        # Alert: institutional gap
-        if isinstance(presencia, dict) and presencia.get("brecha_institucional"):
-            lines.append("")
-            lines.append("ALERTA: Tiene presencia institucional Argos pero SIN producto visible en gondola.")
+        # Iterate over all extracted categories generically
+        for cat_id, cat_data in extracted.items():
+            if cat_id in META_FIELDS:
+                continue
 
-        # Profile
-        perfil = extracted.get("perfil_del_punto", {})
-        if isinstance(perfil, dict):
-            cats = perfil.get("categorias_principales", "")
-            if cats:
-                lines.append("")
-                lines.append(f"Perfil: {cats}")
+            cat_label = cat_id.replace("_", " ").title()
 
-            surtido = perfil.get("densidad_surtido", "")
-            org = perfil.get("organizacion", "")
-            senales = perfil.get("senales_actividad", "")
-            estado_parts = []
-            if surtido:
-                estado_parts.append(f"surtido {surtido}")
-            if org:
-                estado_parts.append(f"organizacion {org}")
-            if estado_parts:
-                lines.append(f"Estado: {', '.join(estado_parts)}")
-            if senales:
-                lines.append(f"Actividad: {senales}")
+            if isinstance(cat_data, dict):
+                # Show non-empty fields
+                field_lines = []
+                for k, v in cat_data.items():
+                    if v and v not in (False, 0, ""):
+                        field_lines.append(f"  {k}: {v}")
+                if field_lines:
+                    lines.append(f"\n{cat_label}:")
+                    lines.extend(field_lines)
 
-            oportunidad = perfil.get("oportunidad_producto", "")
-            score = perfil.get("score_oportunidad", 0)
-            if oportunidad:
-                score_str = f" (score: {score}/10)" if score else ""
-                lines.append(f"Oportunidad: {oportunidad}{score_str}")
-
-        # Competition highlights
-        competencia = extracted.get("actividad_competencia", [])
-        if isinstance(competencia, list) and competencia:
-            marcas = [c.get("marca", "?") for c in competencia if isinstance(c, dict) and c.get("marca")]
-            alertas = [c for c in competencia if isinstance(c, dict) and c.get("alerta")]
-            if marcas:
-                lines.append(f"Competencia: {', '.join(marcas)}")
-            for a in alertas:
-                lines.append(f"  Alerta competencia: {a.get('marca', '?')} - {a.get('actividad', '?')}")
-
-        # Prices summary
-        precios = extracted.get("precios", [])
-        if isinstance(precios, list) and precios:
-            lines.append(f"Precios: {len(precios)} producto(s) registrados")
+            elif isinstance(cat_data, list) and cat_data:
+                lines.append(f"\n{cat_label}: {len(cat_data)} registro(s)")
+                # Show first 3 items as summary
+                for j, item in enumerate(cat_data[:3]):
+                    if isinstance(item, dict):
+                        summary_parts = [str(v) for v in item.values() if v]
+                        lines.append(f"  {j+1}. {' | '.join(summary_parts[:3])}")
 
         lines.append("")
 

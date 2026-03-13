@@ -53,17 +53,19 @@ async def get_or_create_session(
     if result and result.data:
         return result.data
 
-    # Look up user name
+    # Look up user name and implementation
     user = await get_user_by_phone(phone)
     user_name = user["name"] if user else phone
+    impl_id = user.get("implementation", "argos") if user else "argos"
 
-    # Create new session
+    # Create new session with implementation from user record
     new_session = {
         "user_phone": phone,
         "user_name": user_name,
         "date": str(date),
         "status": "accumulating",
         "raw_files": [],
+        "implementation": impl_id,
     }
     result = client.table("sessions").insert(new_session).execute()
     logger.info("session_created", session_id=result.data[0]["id"])

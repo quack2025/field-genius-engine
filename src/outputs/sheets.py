@@ -42,18 +42,10 @@ def _get_sheets_client() -> gspread.Client | None:
         return None
 
 
-def _load_schema(visit_type: str, implementation: str = "argos") -> dict[str, Any]:
-    """Load schema JSON for a visit type."""
-    type_to_file = {
-        "ferreteria": "ferreteria.json",
-        "obra_civil": "obra_civil.json",
-        "obra_pequeña": "obra_pequena.json",
-        "obra_pequena": "obra_pequena.json",
-    }
-    filename = type_to_file.get(visit_type, "ferreteria.json")
-    path = f"src/implementations/{implementation}/schemas/{filename}"
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
+async def _load_schema(visit_type: str, implementation: str = "argos") -> dict[str, Any]:
+    """Load schema JSON for a visit type via ConfigLoader (DB-first, file-fallback)."""
+    from src.engine.config_loader import get_visit_type_schema
+    return await get_visit_type_schema(implementation, visit_type)
 
 
 def _build_headers(schema: dict[str, Any]) -> list[str]:
@@ -128,7 +120,14 @@ async def write_visit_report(
         logger.warning("sheets_write_skipped", reason="no_client")
         return None
 
-    spreadsheet_id = settings.google_spreadsheet_id
+    # Use per-client spreadsheet if available, fall back to global
+    from src.engine.config_loader import get_implementation as get_impl
+    try:
+        impl_config = await get_impl(implementation)
+        spreadsheet_id = impl_config.google_spreadsheet_id or settings.google_spreadsheet_id
+    except Exception:
+        spreadsheet_id = settings.google_spreadsheet_id
+
     if not spreadsheet_id:
         logger.warning("sheets_write_skipped", reason="no_spreadsheet_id")
         return None
@@ -136,7 +135,7 @@ async def write_visit_report(
     visit_type = report.get("visit_type", "ferreteria")
 
     try:
-        schema = _load_schema(visit_type, implementation)
+        schema = await _load_schema(visit_type, implementation)
         tab_name = schema.get("sheets_tab", visit_type)
         headers = _build_headers(schema)
 
