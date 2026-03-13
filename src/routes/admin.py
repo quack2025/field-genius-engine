@@ -9,6 +9,7 @@ import structlog
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from src.config.settings import settings
 from src.engine.supabase_client import get_client
 
 logger = structlog.get_logger(__name__)
@@ -334,6 +335,77 @@ def _count_by(items: list[dict], key: str) -> dict[str, int]:
 
 
 # ── Config Reload ─────────────────────────────────────────────────
+
+
+# ── Sessions (read-only for backoffice) ──────────────────────────
+
+
+@router.get("/sessions")
+async def list_sessions(
+    impl: str | None = None,
+    phone: str | None = None,
+    status: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> dict:
+    """List sessions with optional filters."""
+    client = get_client()
+    query = client.table("sessions").select("*").order("date", desc=True).order("created_at", desc=True)
+
+    if impl:
+        query = query.eq("implementation", impl)
+    if phone:
+        query = query.eq("user_phone", phone)
+    if status:
+        query = query.eq("status", status)
+    if date_from:
+        query = query.gte("date", date_from)
+    if date_to:
+        query = query.lte("date", date_to)
+
+    query = query.range(offset, offset + limit - 1)
+    result = query.execute()
+    return {"success": True, "data": result.data or [], "error": None}
+
+
+@router.get("/sessions/{session_id}")
+async def get_session_detail(session_id: str) -> dict:
+    """Get full session detail including media URLs and visit reports."""
+    client = get_client()
+
+    # Fetch session
+    session = (
+        client.table("sessions")
+        .select("*")
+        .eq("id", session_id)
+        .maybe_single()
+        .execute()
+    )
+    if not session or not session.data:
+        raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
+
+    session_data = session.data
+
+    # Generate public URLs for media files
+    raw_files = session_data.get("raw_files") or []
+    for f in raw_files:
+        storage_path = f.get("storage_path")
+        if storage_path:
+            f["public_url"] = f"{settings.supabase_url}/storage/v1/object/public/media/{storage_path}"
+
+    # Fetch visit reports for this session
+    reports = (
+        client.table("visit_reports")
+        .select("*")
+        .eq("session_id", session_id)
+        .order("created_at")
+        .execute()
+    )
+    session_data["visit_reports"] = reports.data or []
+
+    return {"success": True, "data": session_data, "error": None}
 
 
 @router.post("/reload-config")
