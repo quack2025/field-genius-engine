@@ -5,6 +5,7 @@ from fastapi.responses import JSONResponse
 
 from src.channels.whatsapp.webhook import router as webhook_router
 from src.routes.simulate import router as simulate_router
+from src.routes.admin import router as admin_router
 from src.utils.logger import setup_logging
 
 setup_logging()
@@ -16,6 +17,7 @@ app = FastAPI(
 )
 app.include_router(webhook_router)
 app.include_router(simulate_router)
+app.include_router(admin_router)
 
 
 @app.get("/health")
