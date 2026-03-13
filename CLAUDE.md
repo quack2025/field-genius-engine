@@ -417,6 +417,23 @@ El Critic es especialmente importante en:
 
 ---
 
+## Documentación detallada
+
+Para contexto completo del proyecto (arquitectura, DB schema, endpoints, pipeline, implementaciones, backoffice, deploy), consultar la carpeta `agent_docs/`. Cada archivo cubre un área específica:
+
+- `architecture.md` — Componentes del sistema, estructura de repos, principios de diseño
+- `database_schema.md` — Las 6 tablas con columnas, tipos, notas, estructura de raw_files
+- `api_endpoints.md` — Los 16+ endpoints documentados con método, ruta, descripción
+- `pipeline.md` — Flujo daily-batch, 7 pasos del pipeline, modelos AI, ConfigLoader
+- `implementations.md` — Detalle de Argos y Eficacia, estructura de schemas
+- `backoffice.md` — Stack frontend, páginas, API client, patrones de estilo
+- `deploy_and_infra.md` — Railway, Vercel, Supabase, Twilio config
+- `sprint_history.md` — Todos los sprints completados y items pendientes
+
+**Siempre consultar `agent_docs/` al retomar contexto tras perder conversación.**
+
+---
+
 ## Sprints planificados
 
 ### Sprint 1 — Fundación (~2h)

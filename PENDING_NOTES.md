@@ -26,15 +26,25 @@ Documento vivo. Se actualiza al final de cada sprint con items que no bloquean e
 ## Backoffice
 
 - [x] **Sprint C completado** — Repo `quack2025/field-genius-backoffice` creado. React 18 + Vite + Tailwind + Supabase Auth.
-- [ ] **Deploy a Vercel** — Repo listo, falta configurar proyecto en Vercel con env vars.
-- [ ] **CORS en engine** — El backoffice necesita CORS habilitado en FastAPI para llamar `/api/admin/*` desde Vercel.
-- [ ] **.env anon key** — Verificar que el anon key en `.env` del backoffice corresponde al proyecto Supabase correcto.
+- [x] **Deploy a Vercel** — Produccion en `https://field-genius-backoffice.vercel.app`. Auto-deploy via `vercel --prod`.
+- [x] **CORS en engine** — CORSMiddleware configurado en `main.py` (localhost:5173, localhost:3000, field-genius-backoffice.vercel.app).
+- [x] **.env anon key** — Verificado: `sglvhzmwfzetyrhwouiw.supabase.co` con anon key correcta.
+
+## Sprint D — Segundo cliente (Eficacia)
+
+- [x] **Implementation creada** — `eficacia` con industria FMCG, prompts de vision y segmentacion especificos para retail/supermercados.
+- [x] **Visit types creados** — `supermarket_visit` (5 categorias) y `wholesale_visit` (4 categorias) en tabla `visit_types`.
+- [ ] **Google Spreadsheet** — Crear Sheet de Eficacia y compartir con service account. Actualizar `google_spreadsheet_id`.
+- [ ] **Usuarios Eficacia** — Asignar telefonos de impulsadoras reales.
+- [ ] **Test end-to-end** — Enviar fotos como usuario Eficacia por WhatsApp y verificar pipeline completo.
 
 ## Deploy / Infra
 
+- [x] **Railway activo** — Dominio: `https://zealous-endurance-production-f9b2.up.railway.app` (dominio cambio al renombrar servicio).
+- [ ] **Twilio webhook URL** — Verificar que Twilio/WhatsApp apunta al dominio correcto de Railway.
 - [ ] **Tests** — No hay tests automatizados corriendo en CI. Los archivos de test existen pero no estan validados. (Sprint 5)
 - [ ] **WeasyPrint en Railway** — Requiere dependencias de sistema (pango, cairo). Verificar que el Dockerfile las incluya antes de rehabilitar PDF. (Sprint 4)
 
 ---
 
-*Ultima actualizacion: 2026-03-13 — Sprint C completado*
+*Ultima actualizacion: 2026-03-13 — Sprints C+D completados, backoffice deployed, CORS activo*
