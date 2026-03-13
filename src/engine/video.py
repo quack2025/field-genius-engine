@@ -28,7 +28,7 @@ class VideoResult:
 async def process_video(storage_path: str) -> VideoResult:
     """Download video from Supabase Storage and extract frames + audio.
 
-    Extracts 1 frame every 10 seconds and the full audio track.
+    Extracts 1 frame every 5 seconds and the full audio track.
     """
     start = time.time()
     logger.info("video_process_start", storage_path=storage_path)
@@ -49,7 +49,7 @@ async def process_video(storage_path: str) -> VideoResult:
         frames_pattern = os.path.join(tmpdir, "frame_%04d.jpg")
         frame_proc = await asyncio.create_subprocess_exec(
             "ffmpeg", "-i", video_path,
-            "-vf", "fps=1/10",
+            "-vf", "fps=1/5",
             "-q:v", "2",
             frames_pattern,
             "-y", "-loglevel", "error",
