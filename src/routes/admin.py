@@ -56,6 +56,7 @@ class VisitTypeCreate(BaseModel):
 
 
 class VisitTypeUpdate(BaseModel):
+    slug: str | None = None
     display_name: str | None = None
     schema_json: dict[str, Any] | None = None
     sheets_tab: str | None = None
