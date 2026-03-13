@@ -1,6 +1,7 @@
 """Field Genius Engine — FastAPI entry point."""
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from src.channels.whatsapp.webhook import router as webhook_router
@@ -15,6 +16,18 @@ app = FastAPI(
     version="0.1.0",
     description="Multimodal capture → AI → structured reports",
 )
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:5173",
+        "http://localhost:3000",
+        "https://field-genius-backoffice.vercel.app",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 app.include_router(webhook_router)
 app.include_router(simulate_router)
 app.include_router(admin_router)
