@@ -388,12 +388,26 @@ async def get_session_detail(session_id: str) -> dict:
 
     session_data = session.data
 
-    # Generate public URLs for media files
+    # Generate signed URLs for media files (bucket is private)
     raw_files = session_data.get("raw_files") or []
-    for f in raw_files:
-        storage_path = f.get("storage_path")
-        if storage_path:
-            f["public_url"] = f"{settings.supabase_url}/storage/v1/object/public/media/{storage_path}"
+    paths_to_sign = [f["storage_path"] for f in raw_files if f.get("storage_path")]
+    if paths_to_sign:
+        try:
+            signed = client.storage.from_("media").create_signed_urls(
+                paths_to_sign, expires_in=3600  # 1 hour
+            )
+            url_map = {item["path"]: item["signedURL"] for item in signed}
+            for f in raw_files:
+                sp = f.get("storage_path")
+                if sp and sp in url_map:
+                    f["public_url"] = url_map[sp]
+        except Exception as e:
+            logger.warning("signed_url_generation_failed", error=str(e))
+            # Fallback: try public URL pattern (works if bucket is public)
+            for f in raw_files:
+                sp = f.get("storage_path")
+                if sp:
+                    f["public_url"] = f"{settings.supabase_url}/storage/v1/object/public/media/{sp}"
 
     # Fetch visit reports for this session
     reports = (
