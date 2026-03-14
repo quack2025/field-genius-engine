@@ -141,11 +141,14 @@ async def twilio_webhook(request: Request) -> Response:
             # Add file to session
             await handle_media(phone, file_meta)
 
-            # Acknowledge receipt
-            await send_message(from_phone, "Recibido")
+            # QW4: Acknowledge receipt with file count
+            file_count = len(session.get("raw_files", [])) + 1
+            await send_message(from_phone, f"Recibido ({file_count} archivo(s) hoy)")
 
         except Exception as e:
             logger.error("media_processing_failed", phone=phone, error=str(e))
+            # QW3: Notify user on media download failure
+            await send_message(from_phone, "No pude procesar ese archivo. Intenta enviarlo de nuevo.")
 
     # Process text body (if any, and not just media caption)
     if body and num_media == 0:
@@ -171,8 +174,11 @@ async def twilio_webhook(request: Request) -> Response:
         elif result["action"] == "empty_session":
             await send_message(from_phone, result["message"])
         elif result["action"] == "text_added":
-            # Silent acknowledgment for text notes
-            pass
+            # QW2: Hint about trigger words if the message looks like an intent to generate
+            lower_body = body.lower().strip("!.?")
+            intent_words = {"informe", "reportar", "enviar", "procesar", "generar reporte", "hacer reporte"}
+            if lower_body in intent_words:
+                await send_message(from_phone, "Para generar tu reporte escribe: *reporte*")
 
     # Return empty TwiML response (Twilio expects XML)
     twiml = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'

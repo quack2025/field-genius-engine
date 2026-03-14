@@ -167,6 +167,15 @@ async def process_session(session_id: str) -> PipelineResult:
             elapsed_ms=segmentation.elapsed_ms,
         )
 
+        # QW5: Progress message after segmentation
+        phone = session.get("user_phone", "")
+        if phone and not segmentation.needs_clarification:
+            from src.channels.whatsapp.sender import send_message
+            await send_message(
+                phone,
+                f"Identifique {len(segmentation.visits)} visita(s). Extrayendo datos...",
+            )
+
         # Save segmentation result to session
         client = get_client()
         client.table("sessions").update({
@@ -289,6 +298,15 @@ async def process_session(session_id: str) -> PipelineResult:
 
         await update_session_status(session_id, "failed")
         logger.error("pipeline_failed", session_id=session_id, error=str(e), elapsed_ms=result.elapsed_ms)
+
+        # QW1: Notify user on pipeline failure
+        phone = session.get("user_phone", "")
+        if phone:
+            from src.channels.whatsapp.sender import send_message
+            await send_message(
+                phone,
+                "Hubo un error procesando tu reporte. Intenta enviar 'reporte' de nuevo. Si el problema persiste, contacta soporte.",
+            )
 
         return result
 
