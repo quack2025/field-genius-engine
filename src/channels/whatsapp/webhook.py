@@ -83,6 +83,38 @@ async def twilio_webhook(request: Request) -> Response:
         num_media=num_media,
     )
 
+    # Process location sharing (Twilio sends Latitude/Longitude params)
+    latitude = params.get("Latitude")
+    longitude = params.get("Longitude")
+    if latitude and longitude:
+        try:
+            import datetime
+            from src.engine.supabase_client import get_or_create_session
+
+            session = await get_or_create_session(phone, datetime.date.today())
+            location_meta = {
+                "filename": None,
+                "storage_path": None,
+                "type": "location",
+                "content_type": "application/geo",
+                "latitude": float(latitude),
+                "longitude": float(longitude),
+                "address": params.get("Address", ""),
+                "label": params.get("Label", ""),
+                "timestamp": datetime.datetime.now(datetime.UTC).isoformat(),
+            }
+            await handle_media(phone, location_meta)
+            await send_message(from_phone, "Ubicacion recibida")
+            logger.info(
+                "location_received",
+                phone=phone,
+                lat=latitude,
+                lng=longitude,
+                address=params.get("Address", ""),
+            )
+        except Exception as e:
+            logger.error("location_processing_failed", phone=phone, error=str(e))
+
     # Process media attachments
     for i in range(num_media):
         media_url = params.get(f"MediaUrl{i}", "")

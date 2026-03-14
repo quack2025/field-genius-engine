@@ -105,6 +105,19 @@ async def segment_session(
                 frame_desc = await analyze_image(frame, context="frame de video de visita de campo", implementation=implementation)
                 image_descriptions[f"{filename}_frame{idx+1}"] = frame_desc
 
+        elif file_type == "location":
+            lat = file_entry.get("latitude", "")
+            lng = file_entry.get("longitude", "")
+            addr = file_entry.get("address", "")
+            label = file_entry.get("label", "")
+            loc_text = f"Lat: {lat}, Lng: {lng}"
+            if addr:
+                loc_text += f", Direccion: {addr}"
+            if label:
+                loc_text += f", Nombre: {label}"
+            text_notes.append({"timestamp": timestamp, "text": f"[UBICACION GPS COMPARTIDA] {loc_text}"})
+            logger.info("segmenter_location_found", lat=lat, lng=lng, address=addr)
+
         elif file_type == "text":
             body = file_entry.get("body", "")
             if body:
