@@ -256,6 +256,7 @@ async def assign_user(impl_id: str, body: UserAssign) -> dict:
         "name": body.name,
         "role": body.role,
         "implementation": impl_id,
+        "implementation_id": impl_id,
     }
 
     try:
