@@ -7,9 +7,23 @@ from fastapi.responses import JSONResponse
 from src.channels.whatsapp.webhook import router as webhook_router
 from src.routes.simulate import router as simulate_router
 from src.routes.admin import router as admin_router
+from src.config.settings import settings
 from src.utils.logger import setup_logging
 
 setup_logging()
+
+# Fail-fast: warn about missing critical secrets at startup
+_missing = []
+if not settings.anthropic_api_key:
+    _missing.append("ANTHROPIC_API_KEY")
+if not settings.openai_api_key:
+    _missing.append("OPENAI_API_KEY")
+if not settings.supabase_service_role_key:
+    _missing.append("SUPABASE_SERVICE_ROLE_KEY")
+if _missing:
+    import sys
+    print(f"FATAL: Missing required env vars: {', '.join(_missing)}", file=sys.stderr)
+    sys.exit(1)
 
 app = FastAPI(
     title="Field Genius Engine",

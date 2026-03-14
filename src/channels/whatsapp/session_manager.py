@@ -15,13 +15,25 @@ from src.engine.supabase_client import (
 
 logger = structlog.get_logger(__name__)
 
-# Trigger words that close a session and start processing
-TRIGGER_WORDS = {"reporte", "generar", "listo", "fin", "report", "done"}
+# Default trigger words (fallback if DB has none)
+DEFAULT_TRIGGER_WORDS = {"reporte", "generar", "listo", "fin", "report", "done"}
 
 
-def is_trigger(text: str) -> bool:
-    """Check if the text message is a processing trigger."""
-    return text.strip().lower() in TRIGGER_WORDS
+async def get_trigger_words(impl_id: str) -> set[str]:
+    """Load trigger words from DB for the given implementation, fallback to defaults."""
+    try:
+        from src.engine.config_loader import get_implementation
+        config = await get_implementation(impl_id)
+        if config.trigger_words:
+            return {w.lower() for w in config.trigger_words}
+    except Exception as e:
+        logger.warning("trigger_words_load_failed", implementation=impl_id, error=str(e))
+    return DEFAULT_TRIGGER_WORDS
+
+
+def is_trigger_sync(text: str) -> bool:
+    """Quick sync check against default trigger words (used before session exists)."""
+    return text.strip().lower() in DEFAULT_TRIGGER_WORDS
 
 
 async def handle_media(
@@ -66,7 +78,10 @@ async def handle_text(
     today = datetime.date.today()
     session = await get_or_create_session(phone, today)
 
-    if is_trigger(body):
+    impl_id = session.get("implementation", "eficacia")
+    trigger_words = await get_trigger_words(impl_id)
+
+    if body.strip().lower() in trigger_words:
         status = session.get("status", "accumulating")
 
         # Guard: already processing

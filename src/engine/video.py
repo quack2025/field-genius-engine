@@ -45,7 +45,7 @@ async def process_video(storage_path: str) -> VideoResult:
         with open(video_path, "wb") as f:
             f.write(video_bytes)
 
-        # Extract frames: 1 every 10 seconds
+        # Extract frames: 1 every 5 seconds
         frames_pattern = os.path.join(tmpdir, "frame_%04d.jpg")
         frame_proc = await asyncio.create_subprocess_exec(
             "ffmpeg", "-i", video_path,
