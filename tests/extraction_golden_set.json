@@ -1,0 +1,642 @@
+{
+  "_meta": {
+    "description": "15 visit extractions with human-verified expected output for extraction accuracy evaluation",
+    "created": "2026-03-15",
+    "phase": "3B — AI Pipeline Evaluation",
+    "implementation": "argos",
+    "distribution": "5 ferreteria + 5 obra_civil + 5 obra_pequeña"
+  },
+  "golden_visits": [
+    {
+      "id": "E01",
+      "visit_type": "ferreteria",
+      "difficulty": "standard",
+      "inferred_location": "Ferreteria El Constructor, Laureles, Medellin",
+      "input_context": {
+        "transcriptions": {
+          "audio_01.ogg": "Aqui en Ferreteria El Constructor en Laureles. Tienen cemento Argos gris a 32 mil la bolsa de 50 kilos y Holcim a 30 mil. El ferretero don Pedro dice que Argos vende mas pero que Holcim le da mejor margen. Tambien vi mortero Argos a 18 mil. El punto esta bien organizado, tiene aviso de Argos afuera."
+        },
+        "image_descriptions": {
+          "img_001.jpg": "Estante de ferreteria con 8 bolsas de cemento Argos gris 50kg y 12 bolsas de Holcim gris 50kg. Precio visible en etiqueta: Argos $32,000, Holcim $30,000. 4 bolsas de mortero Argos al lado.",
+          "img_002.jpg": "Fachada de ferreteria con aviso 'Ferreteria El Constructor'. Material POP de Argos en la puerta (banner azul). Punto mediano, bien organizado."
+        }
+      },
+      "expected_extraction": {
+        "presencia_argos": {
+          "tiene_aviso_argos": true,
+          "tiene_material_pop": true,
+          "tiene_producto_visible": true,
+          "brecha_institucional": false,
+          "nivel_presencia": "alta",
+          "detalle_presencia": "Aviso exterior Argos, material POP en puerta, producto en gondola (cemento gris + mortero)"
+        },
+        "perfil_del_punto": {
+          "categorias_principales": "cemento, mortero",
+          "tamano_punto": "mediano",
+          "relevancia_argos": "alta",
+          "densidad_surtido": "medio",
+          "organizacion": "buena"
+        },
+        "precios": [
+          {"producto": "Cemento gris 50kg", "marca": "Argos", "categoria": "cemento", "precio": 32000, "presentacion": "Bolsa 50kg"},
+          {"producto": "Cemento gris 50kg", "marca": "Holcim", "categoria": "cemento", "precio": 30000, "presentacion": "Bolsa 50kg"},
+          {"producto": "Mortero", "marca": "Argos", "categoria": "mortero", "precio": 18000, "presentacion": null}
+        ],
+        "share_of_shelf": {
+          "argos_facing": "medio",
+          "competencia_dominante": "Holcim",
+          "notas": "Holcim tiene mas bolsas en gondola (12 vs 8) pero Argos tiene material POP"
+        },
+        "actividad_competencia": [
+          {"marca": "Holcim", "categoria": "cemento", "actividad": "Precio mas bajo que Argos, mejor margen para el ferretero", "alerta": false}
+        ],
+        "relacion_comercial": {
+          "nombre_contacto": "Pedro",
+          "satisfaccion": "positiva",
+          "oportunidad": "Aumentar facing de Argos vs Holcim, ya que Argos vende mas",
+          "seguimiento": "Negociar mejor margen con el ferretero para igualar incentivo de Holcim"
+        },
+        "confidence_score": 0.9
+      }
+    },
+    {
+      "id": "E02",
+      "visit_type": "ferreteria",
+      "difficulty": "standard",
+      "inferred_location": "Ferreteria La Esquina, Envigado",
+      "input_context": {
+        "transcriptions": {
+          "audio_01.ogg": "En Ferreteria La Esquina en Envigado. Aqui tienen Argos a 31 mil y Cemex a 29500. No tienen Holcim. El ferretero Carlos dice que Cemex le da mejor margen y por eso le da mas espacio. Punto mediano, no tiene material POP de nadie."
+        },
+        "image_descriptions": {
+          "img_001.jpg": "Estante con cemento Argos (6 bolsas) y Cemex (15 bolsas). Cemex ocupa mas espacio. Precios escritos a mano en carton: Argos 31000, Cemex 29500.",
+          "img_002.jpg": "Fachada 'Ferreteria La Esquina' en calle comercial. Sin material POP. Punto mediano."
+        }
+      },
+      "expected_extraction": {
+        "presencia_argos": {
+          "tiene_aviso_argos": false,
+          "tiene_material_pop": false,
+          "tiene_producto_visible": true,
+          "brecha_institucional": false,
+          "nivel_presencia": "baja",
+          "detalle_presencia": "Producto en gondola pero sin aviso ni POP, menos espacio que competencia"
+        },
+        "perfil_del_punto": {
+          "categorias_principales": "cemento",
+          "tamano_punto": "mediano",
+          "relevancia_argos": "media",
+          "densidad_surtido": "medio",
+          "organizacion": "regular"
+        },
+        "precios": [
+          {"producto": "Cemento gris", "marca": "Argos", "categoria": "cemento", "precio": 31000, "presentacion": null},
+          {"producto": "Cemento gris", "marca": "Cemex", "categoria": "cemento", "precio": 29500, "presentacion": null}
+        ],
+        "share_of_shelf": {
+          "argos_facing": "bajo",
+          "competencia_dominante": "Cemex",
+          "notas": "Cemex tiene 15 bolsas vs Argos 6, ferretero prioriza Cemex por margen"
+        },
+        "actividad_competencia": [
+          {"marca": "Cemex", "categoria": "cemento", "actividad": "Mejor margen al ferretero, domina espacio en gondola", "alerta": true}
+        ],
+        "relacion_comercial": {
+          "nombre_contacto": "Carlos",
+          "satisfaccion": "neutral",
+          "oportunidad": "Negociar margen competitivo para recuperar espacio",
+          "seguimiento": "Visita con comercial para presentar plan de margen y POP"
+        },
+        "confidence_score": 0.88
+      }
+    },
+    {
+      "id": "E03",
+      "visit_type": "ferreteria",
+      "difficulty": "incomplete_data",
+      "inferred_location": "Deposito materiales sin nombre, Bello",
+      "input_context": {
+        "transcriptions": {},
+        "image_descriptions": {
+          "img_001.jpg": "Deposito de materiales tipo bodega. Sin aviso visible. Se ven bolsas de cemento al fondo pero no se distinguen marcas. Punto grande, desordenado.",
+          "img_002.jpg": "Interior del deposito. Bolsas de cemento, algunas con logo Argos visible. Precio borroso en un carton, parece decir 30 o 31 mil."
+        }
+      },
+      "expected_extraction": {
+        "presencia_argos": {
+          "tiene_aviso_argos": false,
+          "tiene_material_pop": false,
+          "tiene_producto_visible": true,
+          "brecha_institucional": false,
+          "nivel_presencia": "baja",
+          "detalle_presencia": "Producto visible pero sin aviso ni POP, marcas dificiles de distinguir"
+        },
+        "perfil_del_punto": {
+          "categorias_principales": "cemento",
+          "tamano_punto": "grande",
+          "relevancia_argos": "media",
+          "densidad_surtido": null,
+          "organizacion": "mala"
+        },
+        "precios": [
+          {"producto": "Cemento", "marca": "Argos", "categoria": "cemento", "precio": null, "presentacion": null}
+        ],
+        "share_of_shelf": {
+          "argos_facing": null,
+          "competencia_dominante": null,
+          "notas": "No se pueden distinguir marcas claramente en las fotos"
+        },
+        "actividad_competencia": [],
+        "relacion_comercial": {
+          "nombre_contacto": null,
+          "satisfaccion": null,
+          "oportunidad": null,
+          "seguimiento": "Volver a visitar con mas tiempo, tomar mejores fotos y hablar con el encargado"
+        },
+        "confidence_score": 0.4,
+        "_note": "Low confidence expected — photos are unclear, no audio, no contact info"
+      }
+    },
+    {
+      "id": "E04",
+      "visit_type": "ferreteria",
+      "difficulty": "multi_brand",
+      "inferred_location": "Materiales El Gigante, Sabaneta",
+      "input_context": {
+        "transcriptions": {
+          "audio_01.ogg": "En Materiales El Gigante en Sabaneta. Punto enorme tipo deposito. Tienen Argos a 32 mil, Holcim a 30500, Cemex a 30 mil, y Corona en acabados. Promo de Cemex: 2x1 en mortero de pega. El encargado Luis dice que venden 100 bultos de cemento al dia, 40% Argos, 35% Holcim, 25% Cemex. Tienen aviso de Argos grande en la entrada."
+        },
+        "image_descriptions": {
+          "img_001.jpg": "Deposito enorme. Aviso 'Materiales El Gigante'. Logo de Argos grande en fachada.",
+          "img_002.jpg": "Interior con 3 marcas de cemento separadas por hileras. Argos al centro, Holcim a la izquierda, Cemex a la derecha. Precios en pizarra.",
+          "img_003.jpg": "Banner promocion Cemex: '2x1 en mortero de pega'. Material POP nuevo, bien ubicado."
+        }
+      },
+      "expected_extraction": {
+        "presencia_argos": {
+          "tiene_aviso_argos": true,
+          "tiene_material_pop": false,
+          "tiene_producto_visible": true,
+          "brecha_institucional": false,
+          "nivel_presencia": "alta",
+          "detalle_presencia": "Logo grande en fachada, producto al centro de gondola, pero sin POP interior (Cemex si tiene)"
+        },
+        "perfil_del_punto": {
+          "categorias_principales": "cemento, mortero, acabados",
+          "tamano_punto": "grande",
+          "relevancia_argos": "alta",
+          "densidad_surtido": "alto",
+          "organizacion": "buena",
+          "senales_actividad": "100 bultos/dia, punto de alto trafico",
+          "score_oportunidad": 8
+        },
+        "precios": [
+          {"producto": "Cemento gris", "marca": "Argos", "categoria": "cemento", "precio": 32000, "presentacion": null},
+          {"producto": "Cemento gris", "marca": "Holcim", "categoria": "cemento", "precio": 30500, "presentacion": null},
+          {"producto": "Cemento gris", "marca": "Cemex", "categoria": "cemento", "precio": 30000, "presentacion": null}
+        ],
+        "share_of_shelf": {
+          "argos_facing": "alto",
+          "competencia_dominante": "Holcim",
+          "notas": "Argos al centro con 40% de ventas, Holcim 35%, Cemex 25%"
+        },
+        "actividad_competencia": [
+          {"marca": "Cemex", "categoria": "mortero", "actividad": "Promocion 2x1 en mortero de pega con POP nuevo", "alerta": true},
+          {"marca": "Holcim", "categoria": "cemento", "actividad": "Segundo en ventas con precio $1500 menor que Argos", "alerta": false}
+        ],
+        "relacion_comercial": {
+          "nombre_contacto": "Luis",
+          "satisfaccion": "positiva",
+          "oportunidad": "Contrarrestar promo Cemex con oferta en mortero Argos",
+          "seguimiento": "Reportar promo Cemex al equipo comercial, proponer contra-oferta"
+        },
+        "confidence_score": 0.92
+      }
+    },
+    {
+      "id": "E05",
+      "visit_type": "ferreteria",
+      "difficulty": "slang_and_abbreviations",
+      "inferred_location": "Ferreteria Don Marco, La Estrella",
+      "input_context": {
+        "transcriptions": {
+          "audio_01.ogg": "Mira parcero, aqui en donde don Marco en La Estrella. El viejo solo tiene Argos, ni Holcim ni Cemex. Le esta llegando a 33 lucas el bulto. Dice que le gustaria tener mas opciones pero el distribuidor solo le trae Argos. El punto es chiquito pero vende harto, como 15 bultos a la semana."
+        },
+        "image_descriptions": {
+          "img_001.jpg": "Ferreteria muy pequena. Aviso improvisado 'Don Marco'. Solo se ven 6 bolsas de Argos gris."
+        }
+      },
+      "expected_extraction": {
+        "presencia_argos": {
+          "tiene_aviso_argos": false,
+          "tiene_material_pop": false,
+          "tiene_producto_visible": true,
+          "brecha_institucional": false,
+          "nivel_presencia": "media",
+          "detalle_presencia": "Unica marca presente pero sin branding Argos"
+        },
+        "perfil_del_punto": {
+          "categorias_principales": "cemento",
+          "tamano_punto": "pequeño",
+          "relevancia_argos": "alta",
+          "densidad_surtido": "bajo",
+          "organizacion": "regular",
+          "senales_actividad": "15 bultos por semana",
+          "score_oportunidad": 3
+        },
+        "precios": [
+          {"producto": "Cemento gris", "marca": "Argos", "categoria": "cemento", "precio": 33000, "presentacion": "Bolsa 50kg"}
+        ],
+        "share_of_shelf": {
+          "argos_facing": "alto",
+          "competencia_dominante": null,
+          "notas": "100% Argos, unica marca en el punto"
+        },
+        "actividad_competencia": [],
+        "relacion_comercial": {
+          "nombre_contacto": "Marco",
+          "satisfaccion": "neutral",
+          "oportunidad": "Instalar POP y mantener exclusividad antes de que entre competencia",
+          "seguimiento": "Verificar con distribuidor si puede ofrecer mejores condiciones para mantener exclusividad"
+        },
+        "confidence_score": 0.82,
+        "_note": "'lucas' = miles de pesos, 'bulto' = bolsa 50kg, 'parcero' = slang colombiano, 'viejo' = forma coloquial de referirse al ferretero"
+      }
+    },
+    {
+      "id": "E06",
+      "visit_type": "obra_civil",
+      "difficulty": "standard",
+      "inferred_location": "Edificio Torres del Parque, El Poblado, Medellin",
+      "input_context": {
+        "transcriptions": {
+          "audio_01.ogg": "Estoy en la obra del edificio Torres del Parque en El Poblado. Van en etapa de cimentacion. El ingeniero residente es el doctor Martinez, telefono 310 234 5678. Estan usando cemento Argos tipo 1 estructural, consumen 500 bultos por semana. Martinez dice que estan satisfechos con Argos pero que Holcim les ha ofrecido precio mas bajo.",
+          "audio_02.ogg": "El proyecto va a ser de 12 pisos mas sotano. Llevan 3 meses y van a necesitar cemento por 8 meses mas. El director de obra me pidio cotizacion de concreto premezclado tambien."
+        },
+        "image_descriptions": {
+          "img_001.jpg": "Obra de construccion grande. Excavacion para cimentacion. Aviso de obra 'Torres del Parque — Constructora Elite'. Maquinaria pesada visible.",
+          "img_002.jpg": "Pallets con bolsas de cemento Argos tipo 1 apiladas. Aproximadamente 200 bolsas. Mezcladora industrial al lado."
+        }
+      },
+      "expected_extraction": {
+        "datos_proyecto": {
+          "nombre_proyecto": "Edificio Torres del Parque",
+          "ubicacion": "El Poblado, Medellin",
+          "etapa": "cimentación",
+          "tamano_estimado": "12 pisos + sotano"
+        },
+        "proveedor_actual": [
+          {"marca": "Argos", "producto": "Cemento tipo 1 estructural", "volumen_estimado": "500 bultos/semana, 8 meses restantes", "satisfaccion": "alta"}
+        ],
+        "oportunidad": [
+          {"tipo": "upsell", "descripcion": "Cotizacion de concreto premezclado solicitada por director de obra", "urgencia": "alta", "valor_estimado": null},
+          {"tipo": "conversión", "descripcion": "Holcim ofrecio precio mas bajo, riesgo de perder cuenta", "urgencia": "alta", "valor_estimado": null}
+        ],
+        "contacto_clave": {
+          "nombre": "Doctor Martinez",
+          "cargo": "ingeniero residente",
+          "telefono": "310 234 5678",
+          "notas": "Satisfecho con Argos pero recibio oferta de Holcim. Pedir cotizacion de premezclado."
+        },
+        "confidence_score": 0.93
+      }
+    },
+    {
+      "id": "E07",
+      "visit_type": "obra_civil",
+      "difficulty": "standard",
+      "inferred_location": "Centro Comercial Santafe, Medellin",
+      "input_context": {
+        "transcriptions": {
+          "audio_01.ogg": "En la obra del Centro Comercial Santafe, ampliacion zona norte. Etapa de estructura, tercer piso. Estan usando Holcim tipo 3 para la estructura. El maestro dice que usan 200 bultos por semana. El ingeniero residente no estaba hoy."
+        },
+        "image_descriptions": {
+          "img_001.jpg": "Obra de construccion grande. Estructura de concreto de 3 pisos. Bolsas de Holcim tipo 3 apiladas. Mezcladora activa.",
+          "img_002.jpg": "Aviso de obra: 'Ampliacion Centro Comercial Santafe — Zona Norte'. Constructora Conconcreto."
+        }
+      },
+      "expected_extraction": {
+        "datos_proyecto": {
+          "nombre_proyecto": "Ampliacion Centro Comercial Santafe — Zona Norte",
+          "ubicacion": "Medellin",
+          "etapa": "estructura",
+          "tamano_estimado": "3 pisos (en progreso)"
+        },
+        "proveedor_actual": [
+          {"marca": "Holcim", "producto": "Cemento tipo 3", "volumen_estimado": "200 bultos/semana", "satisfaccion": null}
+        ],
+        "oportunidad": [
+          {"tipo": "conversión", "descripcion": "Obra grande usando Holcim, oportunidad de ofrecer Argos tipo 3 con precio competitivo", "urgencia": "media", "valor_estimado": null}
+        ],
+        "contacto_clave": {
+          "nombre": null,
+          "cargo": "ingeniero residente",
+          "telefono": null,
+          "notas": "No estaba disponible. Volver a visitar para contactar."
+        },
+        "confidence_score": 0.78
+      }
+    },
+    {
+      "id": "E08",
+      "visit_type": "obra_civil",
+      "difficulty": "incomplete_data",
+      "inferred_location": "Obra residencial Envigado",
+      "input_context": {
+        "transcriptions": {},
+        "image_descriptions": {
+          "img_001.jpg": "Obra residencial, edificio de 5 pisos en etapa de estructura. No se ve aviso de obra. Bolsas de cemento apiladas pero marca no visible.",
+          "img_002.jpg": "Segundo angulo de la obra. Se alcanzan a ver bolsas con logo Argos. Trabajadores en actividad."
+        }
+      },
+      "expected_extraction": {
+        "datos_proyecto": {
+          "nombre_proyecto": null,
+          "ubicacion": "Envigado",
+          "etapa": "estructura",
+          "tamano_estimado": "5 pisos"
+        },
+        "proveedor_actual": [
+          {"marca": "Argos", "producto": null, "volumen_estimado": null, "satisfaccion": null}
+        ],
+        "oportunidad": [],
+        "contacto_clave": {
+          "nombre": null,
+          "cargo": null,
+          "telefono": null,
+          "notas": null
+        },
+        "confidence_score": 0.45,
+        "_note": "Low confidence — photos only, no audio, limited visible information"
+      }
+    },
+    {
+      "id": "E09",
+      "visit_type": "obra_civil",
+      "difficulty": "multi_supplier",
+      "inferred_location": "Proyecto Altos de la Montana, Rionegro",
+      "input_context": {
+        "transcriptions": {
+          "audio_01.ogg": "Aqui en el proyecto Altos de la Montana en Rionegro. Es un conjunto de 3 torres de 8 pisos. Van en estructura de la torre 2, la torre 1 ya esta en acabados. Estan usando Argos tipo 1 para estructura y Holcim para el mortero de pega. El ingeniero Ramirez dice que estan contentos con Argos pero no con Holcim, el mortero no les esta rindiendo. Les interesa probar mortero Argos."
+        },
+        "image_descriptions": {
+          "img_001.jpg": "Proyecto de 3 torres. Torre 1 con fachada casi terminada. Torre 2 en estructura, piso 5. Aviso 'Altos de la Montana — Constructora Habitat'.",
+          "img_002.jpg": "Bodega de materiales en obra. Bolsas de Argos tipo 1 (pallet de ~100 bolsas) y bolsas de mortero Holcim (pallet de ~50 bolsas).",
+          "img_003.jpg": "Trabajador mezclando mortero Holcim. Se ven bolsas vacias de Holcim."
+        }
+      },
+      "expected_extraction": {
+        "datos_proyecto": {
+          "nombre_proyecto": "Altos de la Montana",
+          "ubicacion": "Rionegro",
+          "etapa": "estructura (torre 2), acabados (torre 1)",
+          "tamano_estimado": "3 torres de 8 pisos"
+        },
+        "proveedor_actual": [
+          {"marca": "Argos", "producto": "Cemento tipo 1 estructural", "volumen_estimado": null, "satisfaccion": "alta"},
+          {"marca": "Holcim", "producto": "Mortero de pega", "volumen_estimado": null, "satisfaccion": "baja"}
+        ],
+        "oportunidad": [
+          {"tipo": "conversión", "descripcion": "Reemplazar mortero Holcim por mortero Argos — cliente insatisfecho con rendimiento de Holcim", "urgencia": "alta", "valor_estimado": null},
+          {"tipo": "upsell", "descripcion": "Torre 3 aun no inicia — asegurar suministro completo Argos", "urgencia": "media", "valor_estimado": null}
+        ],
+        "contacto_clave": {
+          "nombre": "Ramirez",
+          "cargo": "ingeniero residente",
+          "telefono": null,
+          "notas": "Satisfecho con Argos cemento, insatisfecho con Holcim mortero. Interesado en probar mortero Argos."
+        },
+        "confidence_score": 0.9
+      }
+    },
+    {
+      "id": "E10",
+      "visit_type": "obra_civil",
+      "difficulty": "competitive_alert",
+      "inferred_location": "Hospital Regional, Apartado",
+      "input_context": {
+        "transcriptions": {
+          "audio_01.ogg": "Obra del Hospital Regional de Apartado. Obra publica, etapa de cimentacion. Licitacion grande. Estan usando cemento Cemex tipo 1 importado. El comprador dice que Cemex les hizo descuento de 15% por volumen. Es una obra de 2 anos, van 3 meses. Necesitan 1000 bultos por semana. El contacto es el ingeniero Velez, 314 567 8901."
+        },
+        "image_descriptions": {
+          "img_001.jpg": "Obra publica grande. Aviso 'Hospital Regional de Apartado — Gobernacion de Antioquia'. Excavaciones amplias.",
+          "img_002.jpg": "Pallets enormes de cemento Cemex. Logo Cemex por todas partes. Material POP de Cemex en la caseta de obra."
+        }
+      },
+      "expected_extraction": {
+        "datos_proyecto": {
+          "nombre_proyecto": "Hospital Regional de Apartado",
+          "ubicacion": "Apartado, Antioquia",
+          "etapa": "cimentación",
+          "tamano_estimado": "Obra publica, 2 anos de duracion"
+        },
+        "proveedor_actual": [
+          {"marca": "Cemex", "producto": "Cemento tipo 1 importado", "volumen_estimado": "1000 bultos/semana, 21 meses restantes", "satisfaccion": "alta"}
+        ],
+        "oportunidad": [
+          {"tipo": "conversión", "descripcion": "Obra grande con Cemex exclusivo — dificil de desplazar por descuento de volumen del 15%, pero monitorear insatisfaccion", "urgencia": "baja", "valor_estimado": null}
+        ],
+        "contacto_clave": {
+          "nombre": "Velez",
+          "cargo": "ingeniero",
+          "telefono": "314 567 8901",
+          "notas": "Cemex tiene descuento 15% por volumen. Obra publica (licitacion). Dificil conversion a corto plazo."
+        },
+        "confidence_score": 0.88
+      }
+    },
+    {
+      "id": "E11",
+      "visit_type": "obra_pequeña",
+      "difficulty": "standard",
+      "inferred_location": "Obra residencial, barrio Buenos Aires, Medellin",
+      "input_context": {
+        "transcriptions": {
+          "audio_01.ogg": "Con el maestro don Ricardo en Buenos Aires. Esta haciendo una casa de 2 pisos para una senora. Lleva 15 anos de maestro. Usa Argos porque dice que rinde mas y seca mejor. Compra en Ferreteria La Fortuna que le queda a 2 cuadras. El decide la marca, la duena solo pone la plata. Compra 5 bultos cada semana."
+        },
+        "image_descriptions": {
+          "img_001.jpg": "Casa en construccion, 2 pisos, etapa de mamposteria. Ladrillos y cemento visibles. Barrio residencial popular.",
+          "img_002.jpg": "3 bolsas de cemento Argos gris junto a mezcla fresca. Balde y pala al lado."
+        }
+      },
+      "expected_extraction": {
+        "datos_maestro": {
+          "nombre": "Ricardo",
+          "telefono": null,
+          "experiencia": "15 anos",
+          "zona": "Buenos Aires, Medellin"
+        },
+        "producto_actual": [
+          {"marca": "Argos", "producto": "Cemento gris", "razon_uso": "Mejor rendimiento y secado", "frecuencia_compra": "semanal (5 bultos)"}
+        ],
+        "canal_decision": {
+          "donde_compra": "Ferreteria La Fortuna (2 cuadras de la obra)",
+          "quien_decide": "maestro",
+          "influencia": "calidad (rendimiento y secado)"
+        },
+        "oportunidad_conversion": {
+          "probabilidad": "baja",
+          "barrera": "Ya usa Argos y esta satisfecho",
+          "incentivo": "Programa de fidelizacion o descuento por volumen",
+          "accion_siguiente": "Mantener relacion, verificar que Ferreteria La Fortuna tenga stock"
+        },
+        "confidence_score": 0.88
+      }
+    },
+    {
+      "id": "E12",
+      "visit_type": "obra_pequeña",
+      "difficulty": "conversion_opportunity",
+      "inferred_location": "Obra en Itagui",
+      "input_context": {
+        "transcriptions": {
+          "audio_01.ogg": "Aqui con el maestro Hernando en Itagui. Esta levantando una casa de 2 pisos. Usa Holcim porque la ferreteria que le queda cerca solo tiene Holcim. Dice que Argos le gusta mas pero que no le rinde ir hasta otra ferreteria a comprarlo. Compra 8 bultos cada 10 dias. Lleva 20 anos de maestro."
+        },
+        "image_descriptions": {
+          "img_001.jpg": "Casa en construccion, primer piso, etapa de estructura. Columnas de concreto.",
+          "img_002.jpg": "8 bolsas de cemento Holcim apiladas. Una bolsa abierta junto a la mezcla."
+        }
+      },
+      "expected_extraction": {
+        "datos_maestro": {
+          "nombre": "Hernando",
+          "telefono": null,
+          "experiencia": "20 anos",
+          "zona": "Itagui"
+        },
+        "producto_actual": [
+          {"marca": "Holcim", "producto": "Cemento gris", "razon_uso": "Disponibilidad (ferreteria cercana solo tiene Holcim)", "frecuencia_compra": "cada 10 dias (8 bultos)"}
+        ],
+        "canal_decision": {
+          "donde_compra": "Ferreteria cercana (nombre desconocido)",
+          "quien_decide": "maestro",
+          "influencia": "disponibilidad (proximidad)"
+        },
+        "oportunidad_conversion": {
+          "probabilidad": "alta",
+          "barrera": "Disponibilidad — ferreteria cercana no tiene Argos",
+          "incentivo": "Asegurar distribucion Argos en ferreteria cercana o entrega directa",
+          "accion_siguiente": "Identificar la ferreteria cercana y hablar con el ferretero para introducir Argos"
+        },
+        "confidence_score": 0.85
+      }
+    },
+    {
+      "id": "E13",
+      "visit_type": "obra_pequeña",
+      "difficulty": "price_focused",
+      "inferred_location": "Obra barrio Popular, Medellin",
+      "input_context": {
+        "transcriptions": {
+          "audio_01.ogg": "Con el maestro Jesus en el barrio Popular. Obra de ampliacion de un segundo piso. El usa Cemex porque es el mas barato, a 29 mil en la ferreteria de abajo. Dice que Argos esta a 32 mil y no le rinde igual. El que decide es el dueno de la casa porque es el que paga. Compra de a 3 bultos cada vez que necesita."
+        },
+        "image_descriptions": {
+          "img_001.jpg": "Casa de un piso con segundo piso en construccion. Etapa de columnas. Barrio popular, calle empinada.",
+          "img_002.jpg": "2 bolsas de Cemex junto a balde de mezcla. Bolsa vacia de Cemex al lado."
+        }
+      },
+      "expected_extraction": {
+        "datos_maestro": {
+          "nombre": "Jesus",
+          "telefono": null,
+          "experiencia": null,
+          "zona": "Barrio Popular, Medellin"
+        },
+        "producto_actual": [
+          {"marca": "Cemex", "producto": "Cemento gris", "razon_uso": "Precio mas bajo ($29,000 vs Argos $32,000)", "frecuencia_compra": "por obra (3 bultos por compra)"}
+        ],
+        "canal_decision": {
+          "donde_compra": "Ferreteria cercana (barrio Popular)",
+          "quien_decide": "dueño de la casa",
+          "influencia": "precio"
+        },
+        "oportunidad_conversion": {
+          "probabilidad": "baja",
+          "barrera": "Precio — Argos $3000 mas caro por bulto, y el dueno decide por precio",
+          "incentivo": "Demostrar que Argos rinde mas por bolsa (menor costo por m2)",
+          "accion_siguiente": "Baja prioridad — maestro no decide y el diferencial de precio es significativo"
+        },
+        "confidence_score": 0.82
+      }
+    },
+    {
+      "id": "E14",
+      "visit_type": "obra_pequeña",
+      "difficulty": "incomplete_audio",
+      "inferred_location": "Obra reforma local comercial, Laureles",
+      "input_context": {
+        "transcriptions": {
+          "audio_01.ogg": "En Laureles... [ruido de taladro]... el maestro se llama... [inaudible]... estan usando Argos... [ruido]... reforma de un local comercial... el dueno quiere acabados rapidos... [corte de audio]"
+        },
+        "image_descriptions": {
+          "img_001.jpg": "Interior de local comercial en reforma. Paredes a medio construir. Bolsas de cemento Argos y pintura al fondo."
+        }
+      },
+      "expected_extraction": {
+        "datos_maestro": {
+          "nombre": null,
+          "telefono": null,
+          "experiencia": null,
+          "zona": "Laureles, Medellin"
+        },
+        "producto_actual": [
+          {"marca": "Argos", "producto": "Cemento gris", "razon_uso": null, "frecuencia_compra": null}
+        ],
+        "canal_decision": {
+          "donde_compra": null,
+          "quien_decide": null,
+          "influencia": null
+        },
+        "oportunidad_conversion": {
+          "probabilidad": null,
+          "barrera": null,
+          "incentivo": null,
+          "accion_siguiente": "Volver a visitar — audio inaudible, datos insuficientes"
+        },
+        "confidence_score": 0.35,
+        "_note": "Very low confidence due to noisy audio and limited visual evidence. System should flag needs_review."
+      }
+    },
+    {
+      "id": "E15",
+      "visit_type": "obra_pequeña",
+      "difficulty": "multi_product",
+      "inferred_location": "Obra vivienda rural, Santa Elena",
+      "input_context": {
+        "transcriptions": {
+          "audio_01.ogg": "Estoy en Santa Elena, vereda El Plan. El maestro don Alberto, 312 456 7890, lleva 25 anos construyendo por aca. Esta haciendo una casa campestre. Usa Argos para todo: cemento gris, blanco para el enchape, y mortero de pega. Compra en Materiales Santa Elena, le hacen domicilio. Dice que Argos es el unico que le llega hasta aca. Gasta como 20 bultos al mes de gris, 5 de blanco y 10 de mortero."
+        },
+        "image_descriptions": {
+          "img_001.jpg": "Casa campestre en construccion. Entorno rural, arboles alrededor. Estructura de un piso con terraza.",
+          "img_002.jpg": "Bolsas de 3 productos Argos: cemento gris, cemento blanco, y mortero de pega. Todas apiladas en el patio.",
+          "img_003.jpg": "Enchape de bano con cemento blanco Argos. Trabajo detallado del maestro."
+        }
+      },
+      "expected_extraction": {
+        "datos_maestro": {
+          "nombre": "Alberto",
+          "telefono": "312 456 7890",
+          "experiencia": "25 anos",
+          "zona": "Santa Elena, vereda El Plan"
+        },
+        "producto_actual": [
+          {"marca": "Argos", "producto": "Cemento gris", "razon_uso": "Unica marca disponible con domicilio en la zona", "frecuencia_compra": "mensual (20 bultos)"},
+          {"marca": "Argos", "producto": "Cemento blanco", "razon_uso": "Para enchape", "frecuencia_compra": "mensual (5 bultos)"},
+          {"marca": "Argos", "producto": "Mortero de pega", "razon_uso": "Disponibilidad", "frecuencia_compra": "mensual (10 bultos)"}
+        ],
+        "canal_decision": {
+          "donde_compra": "Materiales Santa Elena (con domicilio)",
+          "quien_decide": "maestro",
+          "influencia": "disponibilidad (unica marca con entrega en zona rural)"
+        },
+        "oportunidad_conversion": {
+          "probabilidad": "baja",
+          "barrera": "Ya es 100% Argos",
+          "incentivo": "Programa de fidelizacion para maestros de alto volumen",
+          "accion_siguiente": "Caso exito para testimonial — maestro leal, multi-producto, zona rural"
+        },
+        "confidence_score": 0.92
+      }
+    }
+  ]
+}

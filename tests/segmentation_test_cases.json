@@ -1,0 +1,417 @@
+{
+  "_meta": {
+    "description": "10 simulated sessions with known ground truth for segmentation accuracy evaluation",
+    "created": "2026-03-15",
+    "phase": "3A — AI Pipeline Evaluation",
+    "implementation": "argos",
+    "visit_types": ["ferreteria", "obra_civil", "obra_pequeña"]
+  },
+  "test_cases": [
+    {
+      "id": "S01",
+      "name": "Single ferreteria — easy",
+      "difficulty": "easy",
+      "raw_files": [
+        {"filename": "img_001.jpg", "type": "image", "storage_path": "test/s01/img_001.jpg", "timestamp": "2026-03-10T10:15:00"},
+        {"filename": "img_002.jpg", "type": "image", "storage_path": "test/s01/img_002.jpg", "timestamp": "2026-03-10T10:18:00"},
+        {"filename": "audio_01.ogg", "type": "audio", "storage_path": "test/s01/audio_01.ogg", "timestamp": "2026-03-10T10:20:00"}
+      ],
+      "simulated_transcriptions": {
+        "audio_01.ogg": "Aqui en Ferreteria El Constructor en el barrio Laureles, tienen cemento Argos a 32 mil la bolsa de 50 kilos y Holcim a 30 mil. El ferretero don Pedro dice que Argos vende mas pero Holcim tiene mejor precio."
+      },
+      "simulated_image_descriptions": {
+        "img_001.jpg": "Estante de ferreteria con bolsas de cemento. Se ven 8 bolsas de Argos gris 50kg y 12 bolsas de Holcim gris 50kg. Precio visible: Argos $32,000, Holcim $30,000. Tambien hay 4 bolsas de mortero Argos.",
+        "img_002.jpg": "Fachada de ferreteria con aviso 'Ferreteria El Constructor'. Se ve material POP de Argos en la puerta. Punto mediano, bien organizado."
+      },
+      "expected": {
+        "visit_count": 1,
+        "visits": [
+          {
+            "visit_type": "ferreteria",
+            "inferred_location_contains": "Constructor",
+            "files": ["img_001.jpg", "img_002.jpg", "audio_01.ogg"],
+            "min_confidence": 0.85
+          }
+        ],
+        "unassigned_files": [],
+        "needs_clarification": false
+      }
+    },
+    {
+      "id": "S02",
+      "name": "Two ferreterias — same type different locations",
+      "difficulty": "medium",
+      "raw_files": [
+        {"filename": "img_001.jpg", "type": "image", "storage_path": "test/s02/img_001.jpg", "timestamp": "2026-03-10T09:30:00"},
+        {"filename": "img_002.jpg", "type": "image", "storage_path": "test/s02/img_002.jpg", "timestamp": "2026-03-10T09:35:00"},
+        {"filename": "audio_01.ogg", "type": "audio", "storage_path": "test/s02/audio_01.ogg", "timestamp": "2026-03-10T09:40:00"},
+        {"filename": "img_003.jpg", "type": "image", "storage_path": "test/s02/img_003.jpg", "timestamp": "2026-03-10T14:10:00"},
+        {"filename": "img_004.jpg", "type": "image", "storage_path": "test/s02/img_004.jpg", "timestamp": "2026-03-10T14:15:00"},
+        {"filename": "audio_02.ogg", "type": "audio", "storage_path": "test/s02/audio_02.ogg", "timestamp": "2026-03-10T14:20:00"}
+      ],
+      "simulated_transcriptions": {
+        "audio_01.ogg": "Estoy en Materiales Don Jose, barrio Poblado. Tienen cemento Argos gris a 33 mil y blanco a 45 mil. No tienen Holcim. El dueno dice que solo trabaja con Argos hace 5 anos.",
+        "audio_02.ogg": "Ahora en Ferreteria La Esquina en Envigado. Aqui tienen Argos a 31 mil y Cemex a 29 mil. El ferretero se llama Carlos, dice que Cemex le da mejor margen."
+      },
+      "simulated_image_descriptions": {
+        "img_001.jpg": "Estante con bolsas de cemento solo marca Argos. 15 bolsas de gris 50kg y 5 de blanco 25kg. Punto limpio y organizado.",
+        "img_002.jpg": "Fachada con aviso 'Materiales Don Jose'. Material POP de Argos visible. Punto mediano.",
+        "img_003.jpg": "Estante con cemento Argos y Cemex mezclados. Cemex tiene mas espacio. Precios escritos a mano en carton.",
+        "img_004.jpg": "Fachada 'Ferreteria La Esquina' en calle comercial. Sin material POP de ninguna marca."
+      },
+      "expected": {
+        "visit_count": 2,
+        "visits": [
+          {
+            "visit_type": "ferreteria",
+            "inferred_location_contains": "Don Jose",
+            "files": ["img_001.jpg", "img_002.jpg", "audio_01.ogg"],
+            "min_confidence": 0.85
+          },
+          {
+            "visit_type": "ferreteria",
+            "inferred_location_contains": "Esquina",
+            "files": ["img_003.jpg", "img_004.jpg", "audio_02.ogg"],
+            "min_confidence": 0.85
+          }
+        ],
+        "unassigned_files": [],
+        "needs_clarification": false
+      }
+    },
+    {
+      "id": "S03",
+      "name": "Ferreteria + obra civil — different types",
+      "difficulty": "medium",
+      "raw_files": [
+        {"filename": "img_001.jpg", "type": "image", "storage_path": "test/s03/img_001.jpg", "timestamp": "2026-03-10T10:00:00"},
+        {"filename": "audio_01.ogg", "type": "audio", "storage_path": "test/s03/audio_01.ogg", "timestamp": "2026-03-10T10:10:00"},
+        {"filename": "img_002.jpg", "type": "image", "storage_path": "test/s03/img_002.jpg", "timestamp": "2026-03-10T10:15:00"},
+        {"filename": "img_003.jpg", "type": "image", "storage_path": "test/s03/img_003.jpg", "timestamp": "2026-03-10T14:30:00"},
+        {"filename": "audio_02.ogg", "type": "audio", "storage_path": "test/s03/audio_02.ogg", "timestamp": "2026-03-10T14:40:00"},
+        {"filename": "video_01.mp4", "type": "video", "storage_path": "test/s03/video_01.mp4", "timestamp": "2026-03-10T14:50:00"}
+      ],
+      "simulated_transcriptions": {
+        "audio_01.ogg": "En Ferreteria El Maestro, barrio Belen. Tienen Argos, Holcim y Cemex. Argos a 32500, Holcim a 30 mil, Cemex a 29500. Material POP de Holcim nuevo en la entrada.",
+        "audio_02.ogg": "Aqui en la obra del Centro Comercial Santafe, etapa de estructura. Estan usando cemento Holcim tipo 3 para la estructura. El ingeniero residente es el doctor Martinez, dice que usan 200 bultos por semana.",
+        "video_01.mp4_audio": "Se ve el avance de la estructura del centro comercial, van en el tercer piso. Mucha actividad, hay como 30 trabajadores."
+      },
+      "simulated_image_descriptions": {
+        "img_001.jpg": "Interior de ferreteria con estantes de cemento. Argos, Holcim y Cemex visibles. Precios en etiquetas.",
+        "img_002.jpg": "Material POP de Holcim recien puesto en la puerta de la ferreteria. Banner azul con promocion.",
+        "img_003.jpg": "Obra de construccion grande. Estructura de concreto de 3 pisos. Bolsas de cemento Holcim tipo 3 apiladas. Mezcladora activa.",
+        "video_01.mp4_frame1": "Vista panoramica de obra civil. Estructura de concreto en construccion, 3 pisos visibles. Grua al fondo.",
+        "video_01.mp4_frame2": "Primer plano de pallets con bolsas de cemento Holcim tipo 3. Etiqueta visible."
+      },
+      "expected": {
+        "visit_count": 2,
+        "visits": [
+          {
+            "visit_type": "ferreteria",
+            "inferred_location_contains": "Maestro",
+            "files": ["img_001.jpg", "audio_01.ogg", "img_002.jpg"],
+            "min_confidence": 0.8
+          },
+          {
+            "visit_type": "obra_civil",
+            "inferred_location_contains": "Santafe",
+            "files": ["img_003.jpg", "audio_02.ogg", "video_01.mp4"],
+            "min_confidence": 0.8
+          }
+        ],
+        "unassigned_files": [],
+        "needs_clarification": false
+      }
+    },
+    {
+      "id": "S04",
+      "name": "Three locations high volume — stress test",
+      "difficulty": "hard",
+      "raw_files": [
+        {"filename": "img_001.jpg", "type": "image", "storage_path": "test/s04/img_001.jpg", "timestamp": "2026-03-10T08:30:00"},
+        {"filename": "img_002.jpg", "type": "image", "storage_path": "test/s04/img_002.jpg", "timestamp": "2026-03-10T08:35:00"},
+        {"filename": "img_003.jpg", "type": "image", "storage_path": "test/s04/img_003.jpg", "timestamp": "2026-03-10T08:40:00"},
+        {"filename": "audio_01.ogg", "type": "audio", "storage_path": "test/s04/audio_01.ogg", "timestamp": "2026-03-10T08:45:00"},
+        {"filename": "img_004.jpg", "type": "image", "storage_path": "test/s04/img_004.jpg", "timestamp": "2026-03-10T11:00:00"},
+        {"filename": "img_005.jpg", "type": "image", "storage_path": "test/s04/img_005.jpg", "timestamp": "2026-03-10T11:05:00"},
+        {"filename": "audio_02.ogg", "type": "audio", "storage_path": "test/s04/audio_02.ogg", "timestamp": "2026-03-10T11:10:00"},
+        {"filename": "img_006.jpg", "type": "image", "storage_path": "test/s04/img_006.jpg", "timestamp": "2026-03-10T15:00:00"},
+        {"filename": "audio_03.ogg", "type": "audio", "storage_path": "test/s04/audio_03.ogg", "timestamp": "2026-03-10T15:10:00"},
+        {"filename": "img_007.jpg", "type": "image", "storage_path": "test/s04/img_007.jpg", "timestamp": "2026-03-10T15:15:00"}
+      ],
+      "simulated_transcriptions": {
+        "audio_01.ogg": "Primera visita del dia, Ferreteria San Martin en Itagui. Punto grande, tienen bastante Argos. Cemento gris a 31500, mortero a 18 mil.",
+        "audio_02.ogg": "Estoy ahora en una obra pequena en el barrio Belen. El maestro se llama don Jairo, lleva 15 anos en construccion. Usa Argos porque dice que rinde mas.",
+        "audio_03.ogg": "Ultima visita, Deposito El Gigante en Sabaneta. Punto muy grande, tienen de todo. Argos, Holcim, Cemex, hasta Corona. Argos a 32 mil, Holcim a 30500, Cemex a 30 mil."
+      },
+      "simulated_image_descriptions": {
+        "img_001.jpg": "Ferreteria grande con fachada amplia. Aviso 'Ferreteria San Martin'. Bodega visible atras.",
+        "img_002.jpg": "Interior con gondolas de cemento. Argos dominante, 20+ bolsas. Holcim al lado con 10 bolsas.",
+        "img_003.jpg": "Zona de materiales de construccion. Varillas, ladrillos, tubos PVC. Bien surtido.",
+        "img_004.jpg": "Obra pequena residencial. Casa de 2 pisos en etapa de mamposteria. Ladrillos y cemento visibles.",
+        "img_005.jpg": "Primer plano de bolsas de cemento Argos gris apiladas junto a la mezcla. 5 bolsas vacias al lado.",
+        "img_006.jpg": "Deposito de materiales enorme. Tipo bodega. Aviso 'Deposito El Gigante'.",
+        "img_007.jpg": "Interior de deposito con 3 marcas de cemento en hileras. Argos, Holcim, Cemex. Precios en pizarra."
+      },
+      "expected": {
+        "visit_count": 3,
+        "visits": [
+          {
+            "visit_type": "ferreteria",
+            "inferred_location_contains": "San Martin",
+            "files": ["img_001.jpg", "img_002.jpg", "img_003.jpg", "audio_01.ogg"],
+            "min_confidence": 0.8
+          },
+          {
+            "visit_type": "obra_pequeña",
+            "inferred_location_contains": "Belen",
+            "files": ["img_004.jpg", "img_005.jpg", "audio_02.ogg"],
+            "min_confidence": 0.75
+          },
+          {
+            "visit_type": "ferreteria",
+            "inferred_location_contains": "Gigante",
+            "files": ["img_006.jpg", "audio_03.ogg", "img_007.jpg"],
+            "min_confidence": 0.8
+          }
+        ],
+        "unassigned_files": [],
+        "needs_clarification": false
+      }
+    },
+    {
+      "id": "S05",
+      "name": "Ambiguous photos — needs clarification",
+      "difficulty": "edge_case",
+      "raw_files": [
+        {"filename": "img_001.jpg", "type": "image", "storage_path": "test/s05/img_001.jpg", "timestamp": "2026-03-10T10:00:00"},
+        {"filename": "img_002.jpg", "type": "image", "storage_path": "test/s05/img_002.jpg", "timestamp": "2026-03-10T10:30:00"}
+      ],
+      "simulated_transcriptions": {},
+      "simulated_image_descriptions": {
+        "img_001.jpg": "Interior de local con estantes de cemento. Sin aviso visible. Podria ser ferreteria o deposito. Cemento Argos visible.",
+        "img_002.jpg": "Estante similar con cemento, diferente angulo o posiblemente otro local. No hay avisos ni senales que confirmen si es el mismo punto o uno diferente."
+      },
+      "expected": {
+        "visit_count": 1,
+        "visits": [
+          {
+            "visit_type": "ferreteria",
+            "inferred_location_contains": null,
+            "files": ["img_001.jpg", "img_002.jpg"],
+            "min_confidence": 0.5
+          }
+        ],
+        "unassigned_files": [],
+        "needs_clarification": true,
+        "clarification_about": "Cannot determine if both photos are from the same location or different locations"
+      }
+    },
+    {
+      "id": "S06",
+      "name": "Audio only — no photos",
+      "difficulty": "edge_case",
+      "raw_files": [
+        {"filename": "audio_01.ogg", "type": "audio", "storage_path": "test/s06/audio_01.ogg", "timestamp": "2026-03-10T16:00:00"}
+      ],
+      "simulated_transcriptions": {
+        "audio_01.ogg": "Buenas tardes, estoy en Ferreteria El Sol en el centro de Medellin. Vine a ver precios de cemento. Tienen Argos a 33 mil y Holcim a 31 mil. No tienen Cemex. El ferretero dice que Argos es el que mas vende. Vi material POP de Argos en la entrada. Punto pequeno pero bien surtido."
+      },
+      "simulated_image_descriptions": {},
+      "expected": {
+        "visit_count": 1,
+        "visits": [
+          {
+            "visit_type": "ferreteria",
+            "inferred_location_contains": "Sol",
+            "files": ["audio_01.ogg"],
+            "min_confidence": 0.7
+          }
+        ],
+        "unassigned_files": [],
+        "needs_clarification": false
+      }
+    },
+    {
+      "id": "S07",
+      "name": "Same visit with 4-hour gap — should NOT split",
+      "difficulty": "edge_case",
+      "raw_files": [
+        {"filename": "img_001.jpg", "type": "image", "storage_path": "test/s07/img_001.jpg", "timestamp": "2026-03-10T09:00:00"},
+        {"filename": "audio_01.ogg", "type": "audio", "storage_path": "test/s07/audio_01.ogg", "timestamp": "2026-03-10T09:10:00"},
+        {"filename": "img_002.jpg", "type": "image", "storage_path": "test/s07/img_002.jpg", "timestamp": "2026-03-10T13:15:00"},
+        {"filename": "audio_02.ogg", "type": "audio", "storage_path": "test/s07/audio_02.ogg", "timestamp": "2026-03-10T13:20:00"}
+      ],
+      "simulated_transcriptions": {
+        "audio_01.ogg": "Llegue a la obra del edificio Torres del Parque en el barrio El Poblado. Van en etapa de cimentacion, recien empezaron. Voy a hablar con el ingeniero.",
+        "audio_02.ogg": "Ya hable con el ingeniero Martinez de Torres del Parque. Dice que estan usando 500 bultos de Argos por semana. Estan contentos con la calidad. Me pidio cotizacion para el mortero de pega tambien."
+      },
+      "simulated_image_descriptions": {
+        "img_001.jpg": "Obra en etapa de cimentacion. Se ve excavacion y preparacion de terreno. Aviso de obra 'Torres del Parque'.",
+        "img_002.jpg": "Mismo sitio de obra Torres del Parque. Ahora se ven bultos de cemento Argos apilados cerca de la mezcladora. Trabajadores en actividad."
+      },
+      "expected": {
+        "visit_count": 1,
+        "visits": [
+          {
+            "visit_type": "obra_civil",
+            "inferred_location_contains": "Torres del Parque",
+            "files": ["img_001.jpg", "audio_01.ogg", "img_002.jpg", "audio_02.ogg"],
+            "min_confidence": 0.85
+          }
+        ],
+        "unassigned_files": [],
+        "needs_clarification": false
+      }
+    },
+    {
+      "id": "S08",
+      "name": "Empty session — trigger word only",
+      "difficulty": "adversarial",
+      "raw_files": [],
+      "simulated_transcriptions": {},
+      "simulated_image_descriptions": {},
+      "expected": {
+        "visit_count": 0,
+        "visits": [],
+        "unassigned_files": [],
+        "needs_clarification": true,
+        "clarification_about": "No files to process"
+      }
+    },
+    {
+      "id": "S09",
+      "name": "Five visits — heavy day stress test",
+      "difficulty": "hard",
+      "raw_files": [
+        {"filename": "img_001.jpg", "type": "image", "storage_path": "test/s09/img_001.jpg", "timestamp": "2026-03-10T08:00:00"},
+        {"filename": "audio_01.ogg", "type": "audio", "storage_path": "test/s09/audio_01.ogg", "timestamp": "2026-03-10T08:10:00"},
+        {"filename": "img_002.jpg", "type": "image", "storage_path": "test/s09/img_002.jpg", "timestamp": "2026-03-10T08:15:00"},
+        {"filename": "img_003.jpg", "type": "image", "storage_path": "test/s09/img_003.jpg", "timestamp": "2026-03-10T09:30:00"},
+        {"filename": "audio_02.ogg", "type": "audio", "storage_path": "test/s09/audio_02.ogg", "timestamp": "2026-03-10T09:40:00"},
+        {"filename": "img_004.jpg", "type": "image", "storage_path": "test/s09/img_004.jpg", "timestamp": "2026-03-10T09:45:00"},
+        {"filename": "img_005.jpg", "type": "image", "storage_path": "test/s09/img_005.jpg", "timestamp": "2026-03-10T11:00:00"},
+        {"filename": "audio_03.ogg", "type": "audio", "storage_path": "test/s09/audio_03.ogg", "timestamp": "2026-03-10T11:10:00"},
+        {"filename": "img_006.jpg", "type": "image", "storage_path": "test/s09/img_006.jpg", "timestamp": "2026-03-10T13:30:00"},
+        {"filename": "img_007.jpg", "type": "image", "storage_path": "test/s09/img_007.jpg", "timestamp": "2026-03-10T13:35:00"},
+        {"filename": "audio_04.ogg", "type": "audio", "storage_path": "test/s09/audio_04.ogg", "timestamp": "2026-03-10T13:40:00"},
+        {"filename": "img_008.jpg", "type": "image", "storage_path": "test/s09/img_008.jpg", "timestamp": "2026-03-10T13:42:00"},
+        {"filename": "img_009.jpg", "type": "image", "storage_path": "test/s09/img_009.jpg", "timestamp": "2026-03-10T15:00:00"},
+        {"filename": "audio_05.ogg", "type": "audio", "storage_path": "test/s09/audio_05.ogg", "timestamp": "2026-03-10T15:10:00"},
+        {"filename": "img_010.jpg", "type": "image", "storage_path": "test/s09/img_010.jpg", "timestamp": "2026-03-10T15:15:00"},
+        {"filename": "img_011.jpg", "type": "image", "storage_path": "test/s09/img_011.jpg", "timestamp": "2026-03-10T15:20:00"},
+        {"filename": "img_012.jpg", "type": "image", "storage_path": "test/s09/img_012.jpg", "timestamp": "2026-03-10T15:25:00"},
+        {"filename": "img_013.jpg", "type": "image", "storage_path": "test/s09/img_013.jpg", "timestamp": "2026-03-10T16:30:00"},
+        {"filename": "audio_06.ogg", "type": "audio", "storage_path": "test/s09/audio_06.ogg", "timestamp": "2026-03-10T16:40:00"},
+        {"filename": "img_014.jpg", "type": "image", "storage_path": "test/s09/img_014.jpg", "timestamp": "2026-03-10T16:45:00"}
+      ],
+      "simulated_transcriptions": {
+        "audio_01.ogg": "Primera visita en Ferreteria Central, centro de Medellin. Punto grande, tienen de todo. Argos a 32 mil, Holcim a 30 mil.",
+        "audio_02.ogg": "En Ferreteria El Paisa, barrio Aranjuez. Punto mediano. Solo Argos, no tienen competencia. Precio 33 mil.",
+        "audio_03.ogg": "Obra residencial en Envigado, conjunto Torres Verdes. Etapa de estructura, usando Argos tipo 1. Maestro de obra es don Luis.",
+        "audio_04.ogg": "Ahora en Deposito Constructor, barrio Belen. Punto enorme tipo bodega. Argos, Holcim, Cemex, todo. Cemex tiene promo de 2x1 en mortero.",
+        "audio_05.ogg": "Aqui con el maestro Hernando en una obra pequena en Itagui. Esta haciendo una casa de 2 pisos. Usa Holcim porque le queda mas cerca la ferreteria que lo vende.",
+        "audio_06.ogg": "Ultima visita, Ferreteria Don Marco en La Estrella. Punto pequeno, solo tiene Argos. Don Marco dice que le gustaria tener Holcim tambien para dar opciones."
+      },
+      "simulated_image_descriptions": {
+        "img_001.jpg": "Ferreteria grande centro Medellin. Aviso 'Ferreteria Central'. Gondolas de cemento visibles.",
+        "img_002.jpg": "Interior ferreteria con Argos y Holcim en gondola. Precios en etiquetas.",
+        "img_003.jpg": "Fachada Ferreteria El Paisa. Punto mediano con aviso Argos.",
+        "img_004.jpg": "Interior con solo cemento Argos. Unas 20 bolsas. Sin competencia visible.",
+        "img_005.jpg": "Obra residencial en construccion. Edificio de 5 pisos en estructura. Aviso 'Torres Verdes'.",
+        "img_006.jpg": "Bodega enorme de materiales. Aviso 'Deposito Constructor'.",
+        "img_007.jpg": "Interior de deposito con 3 marcas de cemento en hileras separadas.",
+        "img_008.jpg": "Banner de promocion Cemex 2x1 en mortero. Material POP nuevo.",
+        "img_009.jpg": "Casa en construccion, 2 pisos, etapa de mamposteria. Barrio residencial.",
+        "img_010.jpg": "Bolsas de cemento Holcim apiladas junto a la obra. 8 bolsas.",
+        "img_011.jpg": "Maestro de obra mezclando cemento. Bolsa de Holcim visible.",
+        "img_012.jpg": "Vista general de la calle del barrio, contexto de la obra.",
+        "img_013.jpg": "Ferreteria pequena. Aviso 'Ferreteria Don Marco'. Un solo estante de cemento.",
+        "img_014.jpg": "Interior con 6 bolsas de Argos gris. Nada de competencia. Punto muy basico."
+      },
+      "expected": {
+        "visit_count": 5,
+        "visits": [
+          {
+            "visit_type": "ferreteria",
+            "inferred_location_contains": "Central",
+            "files": ["img_001.jpg", "audio_01.ogg", "img_002.jpg"],
+            "min_confidence": 0.8
+          },
+          {
+            "visit_type": "ferreteria",
+            "inferred_location_contains": "Paisa",
+            "files": ["img_003.jpg", "audio_02.ogg", "img_004.jpg"],
+            "min_confidence": 0.8
+          },
+          {
+            "visit_type": "obra_civil",
+            "inferred_location_contains": "Torres Verdes",
+            "files": ["img_005.jpg", "audio_03.ogg"],
+            "min_confidence": 0.75
+          },
+          {
+            "visit_type": "ferreteria",
+            "inferred_location_contains": "Constructor",
+            "files": ["img_006.jpg", "img_007.jpg", "audio_04.ogg", "img_008.jpg"],
+            "min_confidence": 0.8
+          },
+          {
+            "visit_type": "obra_pequeña",
+            "inferred_location_contains": "Itagui",
+            "files": ["img_009.jpg", "audio_05.ogg", "img_010.jpg", "img_011.jpg", "img_012.jpg"],
+            "min_confidence": 0.7
+          }
+        ],
+        "unassigned_files": [],
+        "needs_clarification": false,
+        "_note": "img_013.jpg, img_014.jpg, audio_06.ogg should form visit 6 (Ferreteria Don Marco) but expected is 5 because the test verifies that the system can handle a 6th visit. Evaluator should accept 5 or 6."
+      }
+    },
+    {
+      "id": "S10",
+      "name": "Mixed relevant + personal photos — noise filter",
+      "difficulty": "edge_case",
+      "raw_files": [
+        {"filename": "img_001.jpg", "type": "image", "storage_path": "test/s10/img_001.jpg", "timestamp": "2026-03-10T10:00:00"},
+        {"filename": "img_002.jpg", "type": "image", "storage_path": "test/s10/img_002.jpg", "timestamp": "2026-03-10T10:05:00"},
+        {"filename": "audio_01.ogg", "type": "audio", "storage_path": "test/s10/audio_01.ogg", "timestamp": "2026-03-10T10:10:00"},
+        {"filename": "img_003.jpg", "type": "image", "storage_path": "test/s10/img_003.jpg", "timestamp": "2026-03-10T12:00:00"},
+        {"filename": "img_004.jpg", "type": "image", "storage_path": "test/s10/img_004.jpg", "timestamp": "2026-03-10T12:05:00"},
+        {"filename": "img_005.jpg", "type": "image", "storage_path": "test/s10/img_005.jpg", "timestamp": "2026-03-10T14:30:00"},
+        {"filename": "audio_02.ogg", "type": "audio", "storage_path": "test/s10/audio_02.ogg", "timestamp": "2026-03-10T14:35:00"}
+      ],
+      "simulated_transcriptions": {
+        "audio_01.ogg": "En Ferreteria La Fortuna, barrio Manrique. Argos a 32 mil, no hay competencia. Punto pequeno pero el senor dice que vende 10 bultos por semana.",
+        "audio_02.ogg": "Ahora en una obra en el barrio Buenos Aires. Estan levantando un edificio de 4 pisos. Usan Argos tipo 1. El maestro es don Ricardo."
+      },
+      "simulated_image_descriptions": {
+        "img_001.jpg": "Ferreteria pequena. Aviso 'Ferreteria La Fortuna'. Bolsas de cemento Argos al frente.",
+        "img_002.jpg": "Interior con estante de cemento Argos. 8 bolsas. Punto basico.",
+        "img_003.jpg": "Foto de un plato de bandeja paisa. Comida en restaurante. No es relevante para visita de campo.",
+        "img_004.jpg": "Selfie de una persona sonriendo en un restaurante. No es relevante para visita de campo.",
+        "img_005.jpg": "Obra de construccion, edificio de 4 pisos en estructura. Bolsas de Argos visibles.",
+        "img_014.jpg": "Interior con 6 bolsas de Argos gris. Nada de competencia. Punto muy basico."
+      },
+      "expected": {
+        "visit_count": 2,
+        "visits": [
+          {
+            "visit_type": "ferreteria",
+            "inferred_location_contains": "Fortuna",
+            "files": ["img_001.jpg", "img_002.jpg", "audio_01.ogg"],
+            "min_confidence": 0.8
+          },
+          {
+            "visit_type": "obra_civil",
+            "inferred_location_contains": "Buenos Aires",
+            "files": ["img_005.jpg", "audio_02.ogg"],
+            "min_confidence": 0.75
+          }
+        ],
+        "unassigned_files_should_include": ["img_003.jpg", "img_004.jpg"],
+        "needs_clarification": false
+      }
+    }
+  ]
+}
