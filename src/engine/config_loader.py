@@ -34,6 +34,7 @@ class ImplementationConfig:
     segmentation_prompt_template: str = ""
     google_spreadsheet_id: str | None = None
     trigger_words: list[str] = field(default_factory=lambda: ["reporte", "generar", "listo", "fin"])
+    analysis_framework: dict[str, Any] | None = None
     visit_types: dict[str, VisitTypeConfig] = field(default_factory=dict)
 
 
@@ -144,6 +145,7 @@ async def _load_from_db(impl_id: str) -> ImplementationConfig | None:
             segmentation_prompt_template=row.get("segmentation_prompt_template", ""),
             google_spreadsheet_id=row.get("google_spreadsheet_id"),
             trigger_words=trigger_words,
+            analysis_framework=row.get("analysis_framework"),
         )
 
         # Load visit types

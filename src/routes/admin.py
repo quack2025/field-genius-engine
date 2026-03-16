@@ -558,3 +558,128 @@ async def test_extraction(body: TestExtractionRequest) -> dict:
     except Exception as e:
         logger.error("test_extraction_failed", error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
+
+
+class ConsolidateRequest(BaseModel):
+    implementation_id: str
+    title: str = "Reporte Consolidado"
+    report_ids: list[str] | None = None  # None = all reports with analysis
+    date_from: str | None = None
+    date_to: str | None = None
+
+
+@router.post("/consolidate-analysis")
+async def consolidate_analysis(body: ConsolidateRequest) -> dict:
+    """Consolidate multiple per-visit analyses into a unified strategic report.
+
+    If report_ids is provided, consolidates those specific reports.
+    Otherwise, consolidates all reports with strategic_analysis for the implementation,
+    optionally filtered by date range.
+    """
+    try:
+        client = get_client()
+
+        # Load implementation config to get framework
+        from src.engine.config_loader import get_implementation
+        impl_config = await get_implementation(body.implementation_id)
+        if not impl_config.analysis_framework:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Implementation '{body.implementation_id}' has no analysis_framework configured",
+            )
+
+        # Query visit reports with strategic analysis
+        query = (
+            client.table("visit_reports")
+            .select("id, visit_type, inferred_location, strategic_analysis, created_at, session_id")
+            .eq("implementation", body.implementation_id)
+            .not_.is_("strategic_analysis", "null")
+        )
+
+        if body.report_ids:
+            query = query.in_("id", body.report_ids)
+        if body.date_from:
+            query = query.gte("created_at", body.date_from)
+        if body.date_to:
+            query = query.lte("created_at", body.date_to)
+
+        result = query.order("created_at").execute()
+        reports = result.data or []
+
+        if not reports:
+            return {
+                "success": False,
+                "data": None,
+                "error": "No reports with strategic analysis found for the given criteria",
+            }
+
+        # Get executive names from sessions
+        session_ids = list({r["session_id"] for r in reports})
+        sessions_result = (
+            client.table("sessions")
+            .select("id, user_name")
+            .in_("id", session_ids)
+            .execute()
+        )
+        session_map = {s["id"]: s.get("user_name", "") for s in (sessions_result.data or [])}
+
+        # Build visit_analyses for consolidation
+        visit_analyses = []
+        for r in reports:
+            visit_analyses.append({
+                "location": r["inferred_location"],
+                "visit_type": r["visit_type"],
+                "analysis_markdown": r["strategic_analysis"],
+                "date": r["created_at"][:10],
+                "executive": session_map.get(r["session_id"], ""),
+            })
+
+        # Run consolidation
+        from src.engine.analyzer import consolidate_analyses
+        consolidated_md = await consolidate_analyses(
+            visit_analyses=visit_analyses,
+            framework=impl_config.analysis_framework,
+            implementation_name=impl_config.name,
+        )
+
+        if not consolidated_md:
+            raise HTTPException(status_code=500, detail="Consolidation analysis failed")
+
+        # Save consolidated report to DB
+        report_ids_list = [r["id"] for r in reports]
+        insert_data = {
+            "implementation_id": body.implementation_id,
+            "title": body.title,
+            "framework": impl_config.analysis_framework.get("id", "babson_pentagon"),
+            "visit_report_ids": report_ids_list,
+            "filters": {
+                "date_from": body.date_from,
+                "date_to": body.date_to,
+            },
+            "analysis_markdown": consolidated_md,
+            "status": "completed",
+        }
+
+        try:
+            save_result = client.table("consolidated_reports").insert(insert_data).execute()
+            consolidated_id = save_result.data[0]["id"] if save_result.data else None
+        except Exception:
+            consolidated_id = None
+            logger.warning("consolidated_report_save_failed_table_may_not_exist")
+
+        return {
+            "success": True,
+            "data": {
+                "id": consolidated_id,
+                "visits_analyzed": len(visit_analyses),
+                "report_ids": report_ids_list,
+                "markdown": consolidated_md,
+            },
+            "error": None,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("consolidate_analysis_failed", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))

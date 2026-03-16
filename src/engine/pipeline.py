@@ -244,6 +244,37 @@ async def process_session(session_id: str) -> PipelineResult:
                 confidence=extraction.confidence_score,
             )
 
+        # Step 4b: Phase 3 — Strategic Analysis (if framework configured)
+        from src.engine.config_loader import get_implementation as _get_impl
+        impl_config = await _get_impl(implementation)
+        if impl_config.analysis_framework:
+            logger.info("pipeline_phase3_start", framework=impl_config.analysis_framework.get("name", ""))
+            from src.engine.analyzer import analyze_visit as run_analysis
+
+            for i, visit in enumerate(segmentation.visits):
+                analysis_md = await run_analysis(
+                    extracted_data=result.extractions[i].extracted_data,
+                    image_descriptions=visit.image_descriptions,
+                    visit_location=visit.inferred_location,
+                    visit_type=visit.visit_type,
+                    framework=impl_config.analysis_framework,
+                    implementation_name=impl_config.name,
+                )
+                if analysis_md and i < len(report_data_list):
+                    report_data_list[i]["strategic_analysis"] = analysis_md
+                    # Update visit_report in Supabase with analysis
+                    report_id = report_data_list[i]["id"]
+                    try:
+                        client = get_client()
+                        client.table("visit_reports").update({
+                            "strategic_analysis": analysis_md,
+                        }).eq("id", report_id).execute()
+                        logger.info("pipeline_analysis_saved", report_id=report_id, chars=len(analysis_md))
+                    except Exception as e:
+                        logger.error("pipeline_analysis_save_failed", report_id=report_id, error=str(e))
+
+            logger.info("pipeline_phase3_complete")
+
         # Step 5: Outputs — Sheets only (PDF/Gamma temporarily disabled)
         # Note: stay in 'processing' status (generating_outputs not in DB CHECK constraint)
         logger.info("pipeline_outputs_start", reports=len(report_data_list))
@@ -269,10 +300,16 @@ async def process_session(session_id: str) -> PipelineResult:
             sheets_tabs=result.sheets_tabs,
         )
 
-        # Step 6: WhatsApp delivery — text summary only (no PDF for now)
+        # Step 6: WhatsApp delivery — summary + strategic analysis
         phone = session.get("user_phone", "")
         if phone:
             await _send_whatsapp_delivery(phone, report_data_list, session, None)
+            # Send strategic analysis if available
+            for rd in report_data_list:
+                analysis_md = rd.get("strategic_analysis")
+                if analysis_md:
+                    from src.channels.whatsapp.sender import send_message as _send
+                    await _send(phone, analysis_md)
 
         # Step 7: Mark session complete
         await update_session_status(session_id, "completed")
