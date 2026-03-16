@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import structlog
-from anthropic import Anthropic
+from anthropic import AsyncAnthropic
 
 from src.config.settings import settings
 from src.engine.transcriber import transcribe
@@ -196,15 +196,22 @@ Responde SOLO en JSON siguiendo este schema exacto:
 Si alguna visita tiene confidence < 0.75 o hay archivos sin asignar, pon needs_clarification: true
 y en clarification_message explica qué necesitas saber."""
 
+    response_text = ""
     try:
-        client = Anthropic(api_key=settings.anthropic_api_key, timeout=90.0)
-        message = client.messages.create(
+        async_client = AsyncAnthropic(api_key=settings.anthropic_api_key, timeout=180.0)
+        message = await async_client.messages.create(
             model="claude-sonnet-4-20250514",
-            max_tokens=2048,
+            max_tokens=4096,
             messages=[{"role": "user", "content": prompt}],
         )
 
         response_text = message.content[0].text.strip()
+        logger.info(
+            "segmenter_response_received",
+            chars=len(response_text),
+            stop_reason=message.stop_reason,
+            preview=response_text[:100],
+        )
 
         # Parse JSON — handle markdown wrapping and partial responses
         json_text = response_text
@@ -226,14 +233,19 @@ y en clarification_message explica qué necesitas saber."""
                 raise
 
     except json.JSONDecodeError as e:
-        logger.error("segmenter_json_parse_failed", error=str(e), response=response_text[:200])
+        logger.error("segmenter_json_parse_failed", error=str(e), response=response_text[:500])
         return SegmentationResult(
             needs_clarification=True,
             clarification_message="Error interno procesando la segmentación. Intenta de nuevo.",
             elapsed_ms=int((time.time() - start) * 1000),
         )
     except Exception as e:
-        logger.error("segmenter_claude_failed", error=str(e))
+        logger.error(
+            "segmenter_claude_failed",
+            error=str(e),
+            error_type=type(e).__name__,
+            response_preview=response_text[:200] if response_text else "no_response",
+        )
         return SegmentationResult(
             needs_clarification=True,
             clarification_message=f"Error procesando: {e}",
