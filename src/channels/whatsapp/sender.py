@@ -24,25 +24,63 @@ def get_twilio_client() -> Client:
 async def send_message(to_phone: str, body: str) -> str | None:
     """Send a WhatsApp text message via Twilio.
 
-    Returns the message SID on success, None on failure.
+    Automatically splits messages exceeding Twilio's 1600 char limit.
+    Returns the last message SID on success, None on failure.
     """
+    MAX_CHARS = 1500  # Leave margin below Twilio's 1600 limit
+
     try:
         client = get_twilio_client()
-        # Twilio expects 'whatsapp:+573001234567' format
         to_whatsapp = f"whatsapp:{to_phone}" if not to_phone.startswith("whatsapp:") else to_phone
 
-        message = client.messages.create(
-            from_=settings.twilio_whatsapp_number,
-            to=to_whatsapp,
-            body=body,
-        )
+        # Split long messages into chunks
+        chunks = _split_message(body, MAX_CHARS) if len(body) > MAX_CHARS else [body]
+        last_sid = None
 
-        logger.info("message_sent", to=to_phone, sid=message.sid)
-        return message.sid
+        for i, chunk in enumerate(chunks):
+            message = client.messages.create(
+                from_=settings.twilio_whatsapp_number,
+                to=to_whatsapp,
+                body=chunk,
+            )
+            last_sid = message.sid
+            logger.info("message_sent", to=to_phone, sid=message.sid, part=i + 1, total=len(chunks))
+
+        return last_sid
 
     except Exception as e:
         logger.error("message_send_failed", to=to_phone, error=str(e))
         return None
+
+
+def _split_message(text: str, max_chars: int) -> list[str]:
+    """Split text into chunks at paragraph boundaries, falling back to line breaks."""
+    if len(text) <= max_chars:
+        return [text]
+
+    chunks: list[str] = []
+    remaining = text
+
+    while remaining:
+        if len(remaining) <= max_chars:
+            chunks.append(remaining)
+            break
+
+        # Try to split at a double newline (paragraph) within limit
+        cut = remaining[:max_chars].rfind("\n\n")
+        if cut == -1 or cut < max_chars // 3:
+            # Fall back to single newline
+            cut = remaining[:max_chars].rfind("\n")
+        if cut == -1 or cut < max_chars // 3:
+            # Fall back to space
+            cut = remaining[:max_chars].rfind(" ")
+        if cut == -1:
+            cut = max_chars
+
+        chunks.append(remaining[:cut].rstrip())
+        remaining = remaining[cut:].lstrip()
+
+    return chunks
 
 
 async def send_media(to_phone: str, body: str, media_url: str) -> str | None:

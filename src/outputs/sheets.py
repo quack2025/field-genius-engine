@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import datetime
 from typing import Any
@@ -134,39 +135,49 @@ async def write_visit_report(
 
     visit_type = report.get("visit_type", "ferreteria")
 
-    try:
-        schema = await _load_schema(visit_type, implementation)
-        tab_name = schema.get("sheets_tab", visit_type)
-        headers = _build_headers(schema)
-
-        spreadsheet = gc.open_by_key(spreadsheet_id)
-
-        # Get or create worksheet
+    max_retries = 3
+    for attempt in range(1, max_retries + 1):
         try:
-            worksheet = spreadsheet.worksheet(tab_name)
-        except gspread.exceptions.WorksheetNotFound:
-            worksheet = spreadsheet.add_worksheet(title=tab_name, rows=1000, cols=len(headers))
-            worksheet.append_row(headers, value_input_option="USER_ENTERED")
-            logger.info("sheets_tab_created", tab=tab_name)
+            schema = await _load_schema(visit_type, implementation)
+            tab_name = schema.get("sheets_tab", visit_type)
+            headers = _build_headers(schema)
 
-        # Check if headers exist (first row)
-        existing = worksheet.row_values(1)
-        if not existing:
-            worksheet.append_row(headers, value_input_option="USER_ENTERED")
+            spreadsheet = gc.open_by_key(spreadsheet_id)
 
-        # Flatten and write rows
-        rows = _flatten_visit(report, schema, session)
-        for row in rows:
-            worksheet.append_row(row, value_input_option="USER_ENTERED")
+            # Get or create worksheet
+            try:
+                worksheet = spreadsheet.worksheet(tab_name)
+            except gspread.exceptions.WorksheetNotFound:
+                worksheet = spreadsheet.add_worksheet(title=tab_name, rows=1000, cols=len(headers))
+                worksheet.append_row(headers, value_input_option="USER_ENTERED")
+                logger.info("sheets_tab_created", tab=tab_name)
 
-        logger.info(
-            "sheets_write_success",
-            tab=tab_name,
-            rows_written=len(rows),
-            visit_type=visit_type,
-        )
-        return tab_name
+            # Check if headers exist (first row)
+            existing = worksheet.row_values(1)
+            if not existing:
+                worksheet.append_row(headers, value_input_option="USER_ENTERED")
 
-    except Exception as e:
-        logger.error("sheets_write_failed", error=str(e), visit_type=visit_type)
-        return None
+            # Flatten and write rows
+            rows = _flatten_visit(report, schema, session)
+            for row in rows:
+                worksheet.append_row(row, value_input_option="USER_ENTERED")
+
+            logger.info(
+                "sheets_write_success",
+                tab=tab_name,
+                rows_written=len(rows),
+                visit_type=visit_type,
+            )
+            return tab_name
+
+        except Exception as e:
+            logger.error(
+                "sheets_write_failed",
+                error=str(e),
+                visit_type=visit_type,
+                attempt=attempt,
+            )
+            if attempt < max_retries:
+                await asyncio.sleep(2 ** attempt)  # 2s, 4s backoff
+            else:
+                return None
