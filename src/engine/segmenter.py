@@ -162,14 +162,15 @@ async def segment_session(
     segmentation_schema = _build_segmentation_schema(visit_type_options)
 
     # Use custom template if available, otherwise build default prompt
+    # NOTE: Use .replace() instead of .format() because templates contain literal
+    # JSON braces {} that would cause KeyError with str.format()
     if impl_config.segmentation_prompt_template:
-        prompt = impl_config.segmentation_prompt_template.format(
-            implementation_name=impl_config.name,
-            visit_type_options=visit_type_options,
-            filenames=json.dumps(all_filenames, ensure_ascii=False),
-            consolidated_context=consolidated_context,
-            segmentation_schema=segmentation_schema,
-        )
+        prompt = impl_config.segmentation_prompt_template
+        prompt = prompt.replace("{implementation_name}", impl_config.name)
+        prompt = prompt.replace("{visit_type_options}", visit_type_options)
+        prompt = prompt.replace("{filenames}", json.dumps(all_filenames, ensure_ascii=False))
+        prompt = prompt.replace("{consolidated_context}", consolidated_context)
+        prompt = prompt.replace("{segmentation_schema}", segmentation_schema)
     else:
         prompt = f"""Eres un analista que debe identificar cuántas visitas de campo distintas
 hay en este conjunto de capturas enviadas por un representante de {impl_config.name}.
