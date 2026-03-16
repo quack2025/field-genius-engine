@@ -174,10 +174,10 @@ async def twilio_webhook(request: Request) -> Response:
         elif result["action"] == "empty_session":
             await send_message(from_phone, result["message"])
         elif result["action"] == "text_added":
-            # QW2: Hint about trigger words if the message looks like an intent to generate
-            lower_body = body.lower().strip("!.?")
-            intent_words = {"informe", "reportar", "enviar", "procesar", "generar reporte", "hacer reporte"}
-            if lower_body in intent_words:
+            # QW2: Hint about trigger words if any word in the message looks like intent
+            words_in_msg = set(body.lower().strip("!.?").split())
+            intent_words = {"informe", "reportar", "enviar", "procesar"}
+            if words_in_msg & intent_words:
                 await send_message(from_phone, "Para generar tu reporte escribe: *reporte*")
 
     # Return empty TwiML response (Twilio expects XML)

@@ -81,7 +81,11 @@ async def handle_text(
     impl_id = session.get("implementation", "eficacia")
     trigger_words = await get_trigger_words(impl_id)
 
-    if body.strip().lower() in trigger_words:
+    # Check if any trigger word appears in the message (not just exact match)
+    words_in_message = set(body.strip().lower().split())
+    triggered = bool(words_in_message & trigger_words)
+
+    if triggered:
         status = session.get("status", "accumulating")
 
         # Guard: already processing
