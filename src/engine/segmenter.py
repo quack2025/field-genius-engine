@@ -206,14 +206,24 @@ y en clarification_message explica qué necesitas saber."""
 
         response_text = message.content[0].text.strip()
 
-        # Parse JSON — handle potential markdown wrapping
+        # Parse JSON — handle markdown wrapping and partial responses
         json_text = response_text
         if "```json" in json_text:
             json_text = json_text.split("```json")[1].split("```")[0].strip()
         elif "```" in json_text:
             json_text = json_text.split("```")[1].split("```")[0].strip()
 
-        segmentation_data = json.loads(json_text)
+        # Fallback: find the first { and last } if json.loads fails on raw text
+        try:
+            segmentation_data = json.loads(json_text)
+        except json.JSONDecodeError:
+            brace_start = json_text.find("{")
+            brace_end = json_text.rfind("}")
+            if brace_start != -1 and brace_end != -1:
+                json_text = json_text[brace_start:brace_end + 1]
+                segmentation_data = json.loads(json_text)
+            else:
+                raise
 
     except json.JSONDecodeError as e:
         logger.error("segmenter_json_parse_failed", error=str(e), response=response_text[:200])

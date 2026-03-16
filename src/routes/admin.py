@@ -485,6 +485,42 @@ async def test_vision_prompt(body: TestVisionRequest) -> dict:
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post("/trigger-pipeline/{session_id}")
+async def trigger_pipeline(session_id: str) -> dict:
+    """Manually trigger the pipeline for a session. Resets status to accumulating first."""
+    try:
+        client = get_client()
+
+        # Reset session status to allow re-processing
+        client.table("sessions").update({
+            "status": "accumulating",
+            "updated_at": datetime.datetime.now(datetime.UTC).isoformat(),
+        }).eq("id", session_id).execute()
+
+        from src.engine.pipeline import process_session
+        from src.engine.supabase_client import update_session_status
+        await update_session_status(session_id, "segmenting")
+
+        result = await process_session(session_id)
+
+        return {
+            "success": result.status != "failed",
+            "data": {
+                "status": result.status,
+                "visits": len(result.extractions),
+                "reports": result.report_ids,
+                "sheets_tabs": result.sheets_tabs,
+                "elapsed_ms": result.elapsed_ms,
+                "error": result.error,
+            },
+            "error": result.error,
+        }
+
+    except Exception as e:
+        logger.error("trigger_pipeline_failed", session_id=session_id, error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/test-extraction")
 async def test_extraction(body: TestExtractionRequest) -> dict:
     """Test an extraction schema against sample text. Returns structured JSON."""
