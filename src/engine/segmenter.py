@@ -79,31 +79,52 @@ async def segment_session(
         timestamp = file_entry.get("timestamp", "")
 
         if file_type == "audio" and storage_path:
-            logger.info("segmenter_transcribing", filename=filename)
-            text = await transcribe(storage_path)
-            if text:
-                transcriptions[filename] = text
+            # Use pre-processed transcription if available
+            pre_text = file_entry.get("transcription")
+            if pre_text:
+                logger.info("segmenter_using_cached_transcription", filename=filename)
+                transcriptions[filename] = pre_text
+            else:
+                logger.info("segmenter_transcribing", filename=filename)
+                text = await transcribe(storage_path)
+                if text:
+                    transcriptions[filename] = text
 
         elif file_type == "image" and storage_path:
-            logger.info("segmenter_analyzing_image", filename=filename)
-            desc = await analyze_from_storage(storage_path, implementation=implementation)
-            if desc:
-                image_descriptions[filename] = desc
+            # Use pre-processed image description if available
+            pre_desc = file_entry.get("image_description")
+            if pre_desc:
+                logger.info("segmenter_using_cached_description", filename=filename)
+                image_descriptions[filename] = pre_desc
+            else:
+                logger.info("segmenter_analyzing_image", filename=filename)
+                desc = await analyze_from_storage(storage_path, implementation=implementation)
+                if desc:
+                    image_descriptions[filename] = desc
 
         elif file_type == "video" and storage_path:
-            logger.info("segmenter_processing_video", filename=filename)
-            video_result = await process_video(storage_path)
-            # Transcribe extracted audio
-            if video_result.audio_bytes:
-                text = await transcribe_bytes(video_result.audio_bytes)
-                if text:
-                    transcriptions[f"{filename}_audio"] = text
-            # Analyze frames
-            for idx, frame in enumerate(video_result.frames):
-                desc = f"[Frame {idx+1} de video {filename}]"
-                from src.engine.vision import analyze_image
-                frame_desc = await analyze_image(frame, context="frame de video de visita de campo", implementation=implementation)
-                image_descriptions[f"{filename}_frame{idx+1}"] = frame_desc
+            # Use pre-processed video data if available
+            pre_text = file_entry.get("transcription")
+            pre_desc = file_entry.get("image_description")
+            if pre_text or pre_desc:
+                logger.info("segmenter_using_cached_video", filename=filename)
+                if pre_text:
+                    transcriptions[f"{filename}_audio"] = pre_text
+                if pre_desc:
+                    image_descriptions[f"{filename}_frame1"] = pre_desc
+            else:
+                logger.info("segmenter_processing_video", filename=filename)
+                video_result = await process_video(storage_path)
+                # Transcribe extracted audio
+                if video_result.audio_bytes:
+                    text = await transcribe_bytes(video_result.audio_bytes)
+                    if text:
+                        transcriptions[f"{filename}_audio"] = text
+                # Analyze frames
+                for idx, frame in enumerate(video_result.frames):
+                    from src.engine.vision import analyze_image
+                    frame_desc = await analyze_image(frame, context="frame de video de visita de campo", implementation=implementation)
+                    image_descriptions[f"{filename}_frame{idx+1}"] = frame_desc
 
         elif file_type == "location":
             lat = file_entry.get("latitude", "")

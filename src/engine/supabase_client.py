@@ -93,6 +93,24 @@ async def add_file_to_session(session_id: str, file_metadata: dict[str, Any]) ->
     ).eq("id", session_id).execute()
 
 
+async def update_file_in_session(
+    session_id: str, filename: str, updates: dict[str, Any]
+) -> None:
+    """Update fields on a specific file entry in raw_files (matched by filename)."""
+    client = get_client()
+    session = (
+        client.table("sessions").select("raw_files").eq("id", session_id).single().execute()
+    )
+    files: list[dict[str, Any]] = session.data["raw_files"] or []
+    for f in files:
+        if f.get("filename") == filename:
+            f.update(updates)
+            break
+    client.table("sessions").update(
+        {"raw_files": files, "updated_at": datetime.datetime.now(datetime.UTC).isoformat()}
+    ).eq("id", session_id).execute()
+
+
 async def get_session(session_id: str) -> dict[str, Any] | None:
     """Get a session by ID."""
     logger.info("get_session", session_id=session_id)

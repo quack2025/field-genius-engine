@@ -9,10 +9,13 @@ from urllib.parse import urlencode
 import structlog
 from fastapi import APIRouter, Request, Response
 
+import asyncio
+
 from src.config.settings import settings
 from src.channels.whatsapp.session_manager import handle_media, handle_text
 from src.channels.whatsapp.sender import send_message
 from src.engine.media_downloader import download_and_store
+from src.engine.preprocessor import preprocess_file
 
 logger = structlog.get_logger(__name__)
 
@@ -144,6 +147,12 @@ async def twilio_webhook(request: Request) -> Response:
             # QW4: Acknowledge receipt with file count
             file_count = len(session.get("raw_files", [])) + 1
             await send_message(from_phone, f"Recibido ({file_count} archivo(s) hoy)")
+
+            # Pre-process in background (transcribe audio / analyze image)
+            impl_id = session.get("implementation", "eficacia")
+            asyncio.create_task(
+                preprocess_file(session["id"], file_meta, implementation=impl_id)
+            )
 
         except Exception as e:
             logger.error("media_processing_failed", phone=phone, error=str(e))
