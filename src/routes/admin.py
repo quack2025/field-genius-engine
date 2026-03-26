@@ -560,6 +560,138 @@ async def test_extraction(body: TestExtractionRequest) -> dict:
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class GenerateReportRequest(BaseModel):
+    session_id: str
+    report_type: str  # 'tactical' | 'strategic' | 'innovation' | 'all'
+
+
+@router.post("/generate-report")
+async def generate_report_endpoint(body: GenerateReportRequest) -> dict:
+    """Generate one or all report types for a session.
+
+    Uses pre-processed transcriptions and image descriptions from raw_files.
+    No pipeline execution needed — works directly on accumulated media data.
+    """
+    try:
+        client = get_client()
+
+        # Load session with all data
+        session_result = (
+            client.table("sessions")
+            .select("*")
+            .eq("id", body.session_id)
+            .maybe_single()
+            .execute()
+        )
+        if not session_result or not session_result.data:
+            raise HTTPException(status_code=404, detail=f"Session '{body.session_id}' not found")
+
+        session = session_result.data
+
+        # Load implementation config
+        impl_id = session.get("implementation", settings.default_implementation)
+        from src.engine.config_loader import get_implementation
+        impl_config = await get_implementation(impl_id)
+
+        if not impl_config.analysis_framework:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Implementation '{impl_id}' has no analysis_framework configured",
+            )
+
+        af = impl_config.analysis_framework
+        frameworks = af.get("frameworks", {})
+
+        # Legacy support: if no "frameworks" key, treat the whole thing as a single framework
+        if not frameworks and af.get("dimensions"):
+            frameworks = {"strategic": af}
+
+        if not frameworks:
+            raise HTTPException(status_code=400, detail="No frameworks configured in analysis_framework")
+
+        from src.engine.analyzer import generate_report, generate_all_reports
+
+        if body.report_type == "all":
+            results = await generate_all_reports(session, frameworks, impl_config.name)
+            # Save each to DB as a consolidated_report or visit_report update
+            saved = {}
+            for rtype, markdown in results.items():
+                if markdown:
+                    saved[rtype] = await _save_report(client, body.session_id, impl_id, rtype, markdown)
+
+            return {
+                "success": True,
+                "data": {
+                    "session_id": body.session_id,
+                    "reports": {
+                        rtype: {
+                            "report_id": saved.get(rtype),
+                            "chars": len(md) if md else 0,
+                            "markdown": md,
+                        }
+                        for rtype, md in results.items()
+                    },
+                },
+                "error": None,
+            }
+        else:
+            if body.report_type not in frameworks:
+                available = list(frameworks.keys())
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Unknown report type '{body.report_type}'. Available: {available}",
+                )
+
+            markdown = await generate_report(
+                session=session,
+                report_type=body.report_type,
+                framework_config=frameworks[body.report_type],
+                implementation_name=impl_config.name,
+            )
+
+            report_id = None
+            if markdown:
+                report_id = await _save_report(client, body.session_id, impl_id, body.report_type, markdown)
+
+            return {
+                "success": markdown is not None,
+                "data": {
+                    "session_id": body.session_id,
+                    "report_type": body.report_type,
+                    "report_id": report_id,
+                    "chars": len(markdown) if markdown else 0,
+                    "markdown": markdown,
+                },
+                "error": None if markdown else "Report generation failed",
+            }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("generate_report_failed", session_id=body.session_id, error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+async def _save_report(
+    client: Any, session_id: str, impl_id: str, report_type: str, markdown: str
+) -> str | None:
+    """Save a generated report to the consolidated_reports table."""
+    try:
+        result = client.table("consolidated_reports").insert({
+            "implementation_id": impl_id,
+            "title": f"{report_type} — {session_id[:8]}",
+            "framework": report_type,
+            "visit_report_ids": [],
+            "filters": {"session_id": session_id},
+            "analysis_markdown": markdown,
+            "status": "completed",
+        }).execute()
+        return result.data[0]["id"] if result.data else None
+    except Exception as e:
+        logger.warning("save_report_failed", error=str(e))
+        return None
+
+
 class ConsolidateRequest(BaseModel):
     implementation_id: str
     title: str = "Reporte Consolidado"
