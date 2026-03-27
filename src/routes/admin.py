@@ -645,15 +645,30 @@ async def generate_report_endpoint(body: GenerateReportRequest) -> dict:
         if not frameworks:
             raise HTTPException(status_code=400, detail="No frameworks configured in analysis_framework")
 
-        from src.engine.analyzer import generate_report, generate_all_reports
+        from src.engine.analyzer import generate_report, generate_all_reports, extract_facts, _build_observations_context
 
         if body.report_type == "all":
             results = await generate_all_reports(session, frameworks, impl_config.name)
-            # Save each to DB as a consolidated_report or visit_report update
+            # Save each to DB + extract facts for aggregation
             saved = {}
+            obs_text = _build_observations_context(session)
             for rtype, markdown in results.items():
                 if markdown:
                     saved[rtype] = await _save_report(client, body.session_id, impl_id, rtype, markdown)
+                    # Extract structured facts in background
+                    fact_result = await extract_facts(markdown, obs_text, rtype, session)
+                    if fact_result:
+                        try:
+                            client.table("session_facts").upsert({
+                                "session_id": body.session_id,
+                                "implementation_id": impl_id,
+                                "framework": rtype,
+                                "facts": fact_result["facts"],
+                                "key_quotes": fact_result["key_quotes"],
+                                "fact_count": fact_result["fact_count"],
+                            }).execute()
+                        except Exception as e:
+                            logger.warning("save_facts_failed", error=str(e))
 
             return {
                 "success": True,
@@ -688,6 +703,21 @@ async def generate_report_endpoint(body: GenerateReportRequest) -> dict:
             report_id = None
             if markdown:
                 report_id = await _save_report(client, body.session_id, impl_id, body.report_type, markdown)
+                # Extract facts for aggregation
+                obs_text = _build_observations_context(session)
+                fact_result = await extract_facts(markdown, obs_text, body.report_type, session)
+                if fact_result:
+                    try:
+                        client.table("session_facts").upsert({
+                            "session_id": body.session_id,
+                            "implementation_id": impl_id,
+                            "framework": body.report_type,
+                            "facts": fact_result["facts"],
+                            "key_quotes": fact_result["key_quotes"],
+                            "fact_count": fact_result["fact_count"],
+                        }).execute()
+                    except Exception as e:
+                        logger.warning("save_facts_failed", error=str(e))
 
             return {
                 "success": markdown is not None,
@@ -850,4 +880,350 @@ async def consolidate_analysis(body: ConsolidateRequest) -> dict:
         raise
     except Exception as e:
         logger.error("consolidate_analysis_failed", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── User Groups ─────────────────────────────────────────────────────
+
+
+class UserGroupCreate(BaseModel):
+    name: str
+    slug: str
+    zone: str | None = None
+    tags: list[str] = []
+
+
+@router.get("/user-groups")
+async def list_user_groups(impl: str | None = None) -> dict:
+    client = get_client()
+    query = client.table("user_groups").select("*").order("name")
+    if impl:
+        query = query.eq("implementation_id", impl)
+    result = query.execute()
+    return {"success": True, "data": result.data or [], "error": None}
+
+
+@router.post("/implementations/{impl_id}/user-groups")
+async def create_user_group(impl_id: str, body: UserGroupCreate) -> dict:
+    client = get_client()
+    result = client.table("user_groups").insert({
+        "implementation_id": impl_id,
+        "name": body.name,
+        "slug": body.slug,
+        "zone": body.zone,
+        "tags": body.tags,
+    }).execute()
+    return {"success": True, "data": result.data[0] if result.data else None, "error": None}
+
+
+@router.put("/user-groups/{group_id}")
+async def update_user_group(group_id: str, body: UserGroupCreate) -> dict:
+    client = get_client()
+    result = client.table("user_groups").update({
+        "name": body.name,
+        "slug": body.slug,
+        "zone": body.zone,
+        "tags": body.tags,
+    }).eq("id", group_id).execute()
+    if not result.data:
+        raise HTTPException(status_code=404, detail=f"Group '{group_id}' not found")
+    return {"success": True, "data": result.data[0], "error": None}
+
+
+class GroupMemberRequest(BaseModel):
+    phone: str
+
+
+@router.post("/user-groups/{group_id}/members")
+async def add_group_member(group_id: str, body: GroupMemberRequest) -> dict:
+    client = get_client()
+    result = client.table("users").update({
+        "group_id": group_id,
+    }).eq("phone", body.phone).execute()
+    if not result.data:
+        raise HTTPException(status_code=404, detail=f"User '{body.phone}' not found")
+    return {"success": True, "data": result.data[0], "error": None}
+
+
+@router.delete("/user-groups/{group_id}/members/{phone}")
+async def remove_group_member(group_id: str, phone: str) -> dict:
+    client = get_client()
+    client.table("users").update({"group_id": None}).eq("phone", phone).eq("group_id", group_id).execute()
+    return {"success": True, "data": {"removed": True}, "error": None}
+
+
+# ── Multi-Level Report Generation ───────────────────────────────────
+
+
+class GroupReportRequest(BaseModel):
+    group_id: str
+    framework: str
+    date_from: str | None = None
+    date_to: str | None = None
+
+
+@router.post("/generate-group-report")
+async def generate_group_report_endpoint(body: GroupReportRequest) -> dict:
+    """Generate a report aggregating all sessions from a user group."""
+    try:
+        client = get_client()
+
+        # Load group
+        group = client.table("user_groups").select("*").eq("id", body.group_id).maybe_single().execute()
+        if not group or not group.data:
+            raise HTTPException(status_code=404, detail="Group not found")
+        group_data = group.data
+
+        # Load implementation
+        from src.engine.config_loader import get_implementation
+        impl_config = await get_implementation(group_data["implementation_id"])
+        frameworks = impl_config.analysis_framework.get("frameworks", {}) if impl_config.analysis_framework else {}
+        if body.framework not in frameworks:
+            raise HTTPException(status_code=400, detail=f"Framework '{body.framework}' not found")
+
+        # Get sessions for this group's users
+        users = client.table("users").select("phone").eq("group_id", body.group_id).execute()
+        phones = [u["phone"] for u in (users.data or [])]
+        if not phones:
+            return {"success": False, "data": None, "error": "No users in this group"}
+
+        # Query session_facts for these users' sessions
+        session_query = client.table("sessions").select("id, user_phone, user_name, date").in_("user_phone", phones)
+        if body.date_from:
+            session_query = session_query.gte("date", body.date_from)
+        if body.date_to:
+            session_query = session_query.lte("date", body.date_to)
+        sessions = session_query.execute()
+        session_ids = [s["id"] for s in (sessions.data or [])]
+        session_map = {s["id"]: s for s in (sessions.data or [])}
+
+        if not session_ids:
+            return {"success": False, "data": None, "error": "No sessions found for this group in date range"}
+
+        # Check for existing facts
+        facts_result = (
+            client.table("session_facts")
+            .select("*")
+            .in_("session_id", session_ids)
+            .eq("framework", body.framework)
+            .execute()
+        )
+        facts_rows = facts_result.data or []
+
+        # Sessions without facts — generate individual reports + extract facts
+        factified_session_ids = {f["session_id"] for f in facts_rows}
+        missing_sessions = [sid for sid in session_ids if sid not in factified_session_ids]
+
+        if missing_sessions:
+            logger.info("generating_missing_facts", count=len(missing_sessions), framework=body.framework)
+            from src.engine.analyzer import generate_report, extract_facts, _build_observations_context
+
+            for sid in missing_sessions[:20]:  # Cap at 20 to avoid timeout
+                session_data = client.table("sessions").select("*").eq("id", sid).maybe_single().execute()
+                if not session_data or not session_data.data:
+                    continue
+                sess = session_data.data
+                obs = _build_observations_context(sess)
+                if not obs.strip():
+                    continue
+
+                # Generate individual report
+                md = await generate_report(sess, body.framework, frameworks[body.framework], impl_config.name)
+                if not md:
+                    continue
+
+                # Extract facts
+                fact_result = await extract_facts(md, obs, body.framework, sess)
+                if fact_result:
+                    try:
+                        client.table("session_facts").upsert({
+                            "session_id": sid,
+                            "implementation_id": group_data["implementation_id"],
+                            "framework": body.framework,
+                            "facts": fact_result["facts"],
+                            "key_quotes": fact_result["key_quotes"],
+                            "fact_count": fact_result["fact_count"],
+                        }).execute()
+                        # Add to facts_rows for the group report
+                        row = {
+                            "facts": fact_result["facts"],
+                            "key_quotes": fact_result["key_quotes"],
+                            "user_name": session_map.get(sid, {}).get("user_name", ""),
+                        }
+                        facts_rows.append(row)
+                    except Exception as e:
+                        logger.warning("save_facts_failed", session_id=sid, error=str(e))
+
+        # Enrich facts_rows with user_name
+        for row in facts_rows:
+            if "user_name" not in row:
+                sid = row.get("session_id", "")
+                row["user_name"] = session_map.get(sid, {}).get("user_name", "")
+
+        if not facts_rows:
+            return {"success": False, "data": None, "error": "No facts could be extracted from sessions"}
+
+        # Generate group report
+        date_range = f"{body.date_from or 'inicio'} a {body.date_to or 'hoy'}"
+        from src.engine.analyzer import generate_group_report
+        markdown = await generate_group_report(
+            facts_rows=facts_rows,
+            framework_id=body.framework,
+            framework_config=frameworks[body.framework],
+            group_name=group_data["name"],
+            date_range=date_range,
+            implementation_name=impl_config.name,
+        )
+
+        # Save to consolidated_reports
+        report_id = None
+        if markdown:
+            report_id = await _save_report(
+                client, body.group_id, group_data["implementation_id"],
+                f"group_{body.framework}", markdown,
+            )
+
+        return {
+            "success": markdown is not None,
+            "data": {
+                "group_id": body.group_id,
+                "group_name": group_data["name"],
+                "framework": body.framework,
+                "sessions_analyzed": len(facts_rows),
+                "report_id": report_id,
+                "chars": len(markdown) if markdown else 0,
+                "markdown": markdown,
+            },
+            "error": None if markdown else "Group report generation failed",
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("generate_group_report_failed", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class ProjectReportRequest(BaseModel):
+    implementation_id: str
+    framework: str
+    date_from: str | None = None
+    date_to: str | None = None
+
+
+@router.post("/generate-project-report")
+async def generate_project_report_endpoint(body: ProjectReportRequest) -> dict:
+    """Generate a project-wide report aggregating all sessions."""
+    try:
+        client = get_client()
+
+        from src.engine.config_loader import get_implementation
+        impl_config = await get_implementation(body.implementation_id)
+        frameworks = impl_config.analysis_framework.get("frameworks", {}) if impl_config.analysis_framework else {}
+        if body.framework not in frameworks:
+            raise HTTPException(status_code=400, detail=f"Framework '{body.framework}' not found")
+
+        # Get ALL session_facts for this implementation + framework
+        query = (
+            client.table("session_facts")
+            .select("*")
+            .eq("implementation_id", body.implementation_id)
+            .eq("framework", body.framework)
+        )
+        if body.date_from:
+            query = query.gte("created_at", body.date_from)
+        if body.date_to:
+            query = query.lte("created_at", body.date_to)
+        facts_result = query.execute()
+        all_facts = facts_result.data or []
+
+        if not all_facts:
+            return {"success": False, "data": None, "error": "No facts found. Generate individual reports first."}
+
+        # Group facts by user_group (or "Sin grupo" for ungrouped)
+        # Get session → group mapping
+        session_ids = [f["session_id"] for f in all_facts]
+        sessions = (
+            client.table("sessions")
+            .select("id, user_phone, user_name, group_id")
+            .in_("id", session_ids)
+            .execute()
+        )
+        session_map = {s["id"]: s for s in (sessions.data or [])}
+
+        # Get group names
+        groups = client.table("user_groups").select("id, name").eq("implementation_id", body.implementation_id).execute()
+        group_names = {g["id"]: g["name"] for g in (groups.data or [])}
+
+        # Bucket facts by group
+        grouped: dict[str, list[dict]] = {}
+        for fact in all_facts:
+            sess = session_map.get(fact["session_id"], {})
+            gid = sess.get("group_id") or "ungrouped"
+            gname = group_names.get(gid, "Sin grupo asignado")
+            fact["user_name"] = sess.get("user_name", "")
+            if gname not in grouped:
+                grouped[gname] = []
+            grouped[gname].append(fact)
+
+        # Generate mini group reports for each bucket
+        from src.engine.analyzer import generate_group_report as gen_grp
+        group_summaries = []
+        date_range = f"{body.date_from or 'inicio'} a {body.date_to or 'hoy'}"
+
+        for gname, gfacts in grouped.items():
+            grp_md = await gen_grp(
+                facts_rows=gfacts,
+                framework_id=body.framework,
+                framework_config=frameworks[body.framework],
+                group_name=gname,
+                date_range=date_range,
+                implementation_name=impl_config.name,
+            )
+            if grp_md:
+                group_summaries.append({
+                    "group_name": gname,
+                    "report_markdown": grp_md,
+                    "session_count": len(gfacts),
+                })
+
+        if not group_summaries:
+            return {"success": False, "data": None, "error": "Could not generate group-level summaries"}
+
+        # Generate project-level report
+        from src.engine.analyzer import generate_project_report
+        markdown = await generate_project_report(
+            group_reports=group_summaries,
+            framework_id=body.framework,
+            framework_config=frameworks[body.framework],
+            implementation_name=impl_config.name,
+            date_range=date_range,
+            total_sessions=len(all_facts),
+        )
+
+        report_id = None
+        if markdown:
+            report_id = await _save_report(
+                client, body.implementation_id, body.implementation_id,
+                f"project_{body.framework}", markdown,
+            )
+
+        return {
+            "success": markdown is not None,
+            "data": {
+                "implementation_id": body.implementation_id,
+                "framework": body.framework,
+                "groups_analyzed": len(group_summaries),
+                "total_sessions": len(all_facts),
+                "report_id": report_id,
+                "chars": len(markdown) if markdown else 0,
+                "markdown": markdown,
+            },
+            "error": None if markdown else "Project report generation failed",
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("generate_project_report_failed", error=str(e))
         raise HTTPException(status_code=500, detail=str(e))

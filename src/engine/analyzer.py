@@ -228,3 +228,301 @@ async def generate_all_reports(
             results[report_type] = result
 
     return results
+
+
+# ── Structured Fact Extraction ──────────────────────────────────────
+
+
+async def extract_facts(
+    report_markdown: str,
+    observations_text: str,
+    framework_id: str,
+    session_meta: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Extract structured facts from a generated report using Haiku (fast/cheap).
+
+    Called after generate_report() to produce queryable data for aggregation.
+    Returns a dict with structured facts + key_quotes, or None on failure.
+    """
+    start = time.time()
+    logger.info("fact_extraction_start", framework=framework_id, session_id=session_meta.get("id"))
+
+    prompt = f"""Analiza este reporte de campo y las observaciones originales.
+Extrae UNICAMENTE hechos concretos y verificables en formato JSON.
+
+REPORTE:
+{report_markdown[:6000]}
+
+OBSERVACIONES ORIGINALES (resumidas):
+{observations_text[:3000]}
+
+METADATA:
+- Ejecutivo: {session_meta.get("user_name", "")}
+- Fecha: {session_meta.get("date", "")}
+- Zona: {session_meta.get("zone", "no especificada")}
+
+Responde UNICAMENTE con JSON valido con esta estructura:
+{{
+  "entities_mentioned": [
+    {{"name": "nombre de marca/competidor/producto", "type": "competitor|brand|product|place", "count": N, "context": "breve contexto"}}
+  ],
+  "prices_detected": [
+    {{"entity": "quien", "item": "que", "price": numero, "currency": "COP|CRC|USD", "is_promotion": true/false}}
+  ],
+  "alerts": [
+    {{"type": "competitive_threat|churn_risk|opportunity|quality_issue", "severity": "high|medium|low", "description": "que pasa", "zone": "donde"}}
+  ],
+  "sentiment": {{"positive": N, "negative": N, "neutral": N}},
+  "zones_covered": ["zona1", "zona2"],
+  "key_themes": ["tema1", "tema2", "tema3"],
+  "key_quotes": ["cita textual 1 del reporte que sea representativa", "cita 2", "cita 3"]
+}}
+
+Si no hay datos para una categoria, usa lista vacia []. No inventes datos."""
+
+    try:
+        client = AsyncAnthropic(api_key=settings.anthropic_api_key, timeout=60.0)
+        message = await client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=2048,
+            messages=[{"role": "user", "content": prompt}],
+        )
+
+        raw = message.content[0].text.strip()
+        # Parse JSON (handle markdown code blocks)
+        if raw.startswith("```"):
+            raw = raw.split("\n", 1)[1].rsplit("```", 1)[0]
+        facts = json.loads(raw)
+
+        elapsed_ms = int((time.time() - start) * 1000)
+        fact_count = (
+            len(facts.get("entities_mentioned", []))
+            + len(facts.get("prices_detected", []))
+            + len(facts.get("alerts", []))
+        )
+
+        logger.info("fact_extraction_complete", framework=framework_id, fact_count=fact_count, elapsed_ms=elapsed_ms)
+        return {
+            "facts": facts,
+            "key_quotes": facts.get("key_quotes", [])[:5],
+            "fact_count": fact_count,
+        }
+
+    except Exception as e:
+        elapsed_ms = int((time.time() - start) * 1000)
+        logger.error("fact_extraction_failed", framework=framework_id, error=str(e), elapsed_ms=elapsed_ms)
+        return None
+
+
+# ── Multi-Level Report Generation ───────────────────────────────────
+
+
+async def generate_group_report(
+    facts_rows: list[dict[str, Any]],
+    framework_id: str,
+    framework_config: dict[str, Any],
+    group_name: str,
+    date_range: str,
+    implementation_name: str = "",
+) -> str | None:
+    """Generate a group-level report by aggregating structured facts from multiple sessions.
+
+    Args:
+        facts_rows: List of session_facts rows (each has .facts, .key_quotes, session metadata)
+        framework_id: Which framework ('competidor', 'cliente', etc.)
+        framework_config: The framework dict with system_prompt and sections
+        group_name: Name of the group (e.g., "Zona San Jose")
+        date_range: Human-readable date range
+        implementation_name: Client name
+    """
+    start = time.time()
+    session_count = len(facts_rows)
+    framework_name = framework_config.get("name", framework_id)
+
+    logger.info("group_report_start", framework=framework_id, group=group_name, sessions=session_count)
+
+    # Aggregate facts with Python (not SQL, for flexibility)
+    all_entities: dict[str, int] = {}
+    all_alerts: list[dict] = []
+    all_prices: list[dict] = []
+    all_themes: dict[str, int] = {}
+    all_quotes: list[str] = []
+    sentiment_totals = {"positive": 0, "negative": 0, "neutral": 0}
+    zones: set[str] = set()
+    executives: set[str] = set()
+
+    for row in facts_rows:
+        facts = row.get("facts", {})
+        executives.add(row.get("user_name", ""))
+
+        for entity in facts.get("entities_mentioned", []):
+            name = entity.get("name", "")
+            all_entities[name] = all_entities.get(name, 0) + entity.get("count", 1)
+
+        all_alerts.extend(facts.get("alerts", []))
+        all_prices.extend(facts.get("prices_detected", []))
+
+        for theme in facts.get("key_themes", []):
+            all_themes[theme] = all_themes.get(theme, 0) + 1
+
+        sent = facts.get("sentiment", {})
+        for k in ("positive", "negative", "neutral"):
+            sentiment_totals[k] += sent.get(k, 0)
+
+        zones.update(facts.get("zones_covered", []))
+        all_quotes.extend(row.get("key_quotes", [])[:2])  # Top 2 per session
+
+    # Build aggregated context for Claude
+    top_entities = sorted(all_entities.items(), key=lambda x: -x[1])[:15]
+    top_themes = sorted(all_themes.items(), key=lambda x: -x[1])[:10]
+    high_alerts = [a for a in all_alerts if a.get("severity") == "high"]
+    sample_quotes = all_quotes[:10]
+
+    aggregated = f"""DATOS AGREGADOS — {session_count} sesiones, {len(executives)} ejecutivos
+Periodo: {date_range}
+Zonas cubiertas: {', '.join(sorted(zones)) or 'No especificadas'}
+
+ENTIDADES MAS MENCIONADAS:
+{json.dumps(top_entities, ensure_ascii=False)}
+
+TEMAS PRINCIPALES:
+{json.dumps(top_themes, ensure_ascii=False)}
+
+ALERTAS DE ALTA SEVERIDAD ({len(high_alerts)}):
+{json.dumps(high_alerts[:10], ensure_ascii=False)}
+
+PRECIOS DETECTADOS ({len(all_prices)} total):
+{json.dumps(all_prices[:20], ensure_ascii=False)}
+
+SENTIMIENTO AGREGADO: {json.dumps(sentiment_totals)}
+
+CITAS REPRESENTATIVAS DEL EQUIPO:
+{chr(10).join(f'- "{q}"' for q in sample_quotes)}"""
+
+    # Build section instructions from framework
+    sections = framework_config.get("sections", []) or framework_config.get("dimensions", [])
+    section_instructions = []
+    for sec in sections:
+        section_instructions.append(f"## {sec.get('label', '')}\n{sec.get('prompt', '')}")
+
+    prompt = f"""CONTEXTO
+- Operacion: {implementation_name}
+- Grupo: {group_name}
+- Periodo: {date_range}
+- Sesiones analizadas: {session_count}
+- Ejecutivos: {len(executives)}
+
+{aggregated}
+
+INSTRUCCIONES
+
+Genera un reporte consolidado de tipo "{framework_name}" para el grupo "{group_name}".
+Este reporte sintetiza las observaciones de {session_count} sesiones de campo.
+Identifica PATRONES, no casos individuales. Cita evidencia de las citas representativas.
+Prioriza hallazgos accionables para el equipo de marketing/estrategia.
+
+{"".join(section_instructions)}
+
+FORMATO: Markdown profesional. Resumen ejecutivo de 5 lineas al inicio. Usa tablas para comparaciones."""
+
+    try:
+        system = framework_config.get("system_prompt", "")
+        client = AsyncAnthropic(api_key=settings.anthropic_api_key, timeout=180.0)
+        message = await client.messages.create(
+            model=framework_config.get("model", "claude-sonnet-4-20250514"),
+            max_tokens=10000,
+            system=system,
+            messages=[{"role": "user", "content": prompt}],
+        )
+
+        report = message.content[0].text.strip()
+        elapsed_ms = int((time.time() - start) * 1000)
+
+        logger.info("group_report_complete", framework=framework_id, group=group_name, chars=len(report), elapsed_ms=elapsed_ms)
+
+        header = f"# {framework_name} — {group_name}\n"
+        header += f"*{implementation_name} | {session_count} sesiones | {len(executives)} ejecutivos | {date_range}*\n\n"
+        return header + report
+
+    except Exception as e:
+        logger.error("group_report_failed", error=str(e))
+        return None
+
+
+async def generate_project_report(
+    group_reports: list[dict[str, Any]],
+    framework_id: str,
+    framework_config: dict[str, Any],
+    implementation_name: str,
+    date_range: str,
+    total_sessions: int,
+) -> str | None:
+    """Generate a project-wide report from group-level reports.
+
+    Args:
+        group_reports: List of dicts with {group_name, report_markdown, session_count, fact_summary}
+        framework_id: Which framework
+        framework_config: Framework config
+        implementation_name: Client name
+        date_range: Period
+        total_sessions: Total sessions across all groups
+    """
+    start = time.time()
+    framework_name = framework_config.get("name", framework_id)
+
+    logger.info("project_report_start", framework=framework_id, groups=len(group_reports), total_sessions=total_sessions)
+
+    # Build group summaries (truncate each to ~2K chars to fit in context)
+    group_blocks = []
+    for gr in group_reports:
+        md = gr.get("report_markdown", "")[:2500]
+        group_blocks.append(
+            f"### {gr['group_name']} ({gr.get('session_count', '?')} sesiones)\n{md}"
+        )
+    groups_text = "\n\n---\n\n".join(group_blocks)
+
+    prompt = f"""CONTEXTO DEL PROYECTO
+- Operacion: {implementation_name}
+- Periodo: {date_range}
+- Grupos analizados: {len(group_reports)}
+- Total de sesiones: {total_sessions}
+
+REPORTES POR GRUPO:
+
+{groups_text}
+
+INSTRUCCIONES
+
+Genera un informe ejecutivo estrategico de tipo "{framework_name}" a nivel de PROYECTO COMPLETO.
+Compara los diferentes grupos/zonas. Identifica:
+1. Patrones que se repiten en TODOS los grupos (hallazgos universales)
+2. Diferencias significativas ENTRE grupos (oportunidades localizadas)
+3. Los 5 hallazgos mas importantes para la toma de decisiones
+4. Plan de accion priorizado (quick wins + estrategico)
+
+No repitas lo que ya dice cada grupo — sintetiza, compara, prioriza.
+
+FORMATO: Markdown ejecutivo. Executive Summary de 5-7 lineas. Tablas comparativas entre grupos. Acciones con responsable y timeline."""
+
+    try:
+        system = framework_config.get("system_prompt", "")
+        client = AsyncAnthropic(api_key=settings.anthropic_api_key, timeout=180.0)
+        message = await client.messages.create(
+            model=framework_config.get("model", "claude-sonnet-4-20250514"),
+            max_tokens=12000,
+            system=system,
+            messages=[{"role": "user", "content": prompt}],
+        )
+
+        report = message.content[0].text.strip()
+        elapsed_ms = int((time.time() - start) * 1000)
+
+        logger.info("project_report_complete", framework=framework_id, chars=len(report), elapsed_ms=elapsed_ms)
+
+        header = f"# {framework_name} — Informe Ejecutivo\n"
+        header += f"*{implementation_name} | {len(group_reports)} grupos | {total_sessions} sesiones | {date_range}*\n\n"
+        return header + report
+
+    except Exception as e:
+        logger.error("project_report_failed", error=str(e))
+        return None
