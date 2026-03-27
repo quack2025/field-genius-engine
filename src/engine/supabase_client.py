@@ -138,6 +138,29 @@ async def save_visit_report(report: dict[str, Any]) -> str:
     return report_id
 
 
+async def update_user_implementation(phone: str, impl_id: str) -> None:
+    """Change the active implementation for a user."""
+    client = get_client()
+    client.table("users").update({
+        "implementation": impl_id,
+        "implementation_id": impl_id,
+    }).eq("phone", phone).execute()
+    logger.info("user_implementation_updated", phone=phone, implementation=impl_id)
+
+
+async def list_active_implementations() -> list[dict[str, Any]]:
+    """List all active implementations (for project menu)."""
+    client = get_client()
+    result = (
+        client.table("implementations")
+        .select("id, name, industry")
+        .eq("status", "active")
+        .order("name")
+        .execute()
+    )
+    return result.data or []
+
+
 async def list_users(limit: int = 10) -> list[dict[str, Any]]:
     """List users (for health check / test)."""
     client = get_client()

@@ -12,7 +12,13 @@ from fastapi import APIRouter, Request, Response
 import asyncio
 
 from src.config.settings import settings
-from src.channels.whatsapp.session_manager import handle_media, handle_text
+from src.channels.whatsapp.session_manager import (
+    handle_media,
+    handle_text,
+    handle_menu,
+    handle_menu_selection,
+    MENU_KEYWORDS,
+)
 from src.channels.whatsapp.sender import send_message
 from src.engine.media_downloader import download_and_store
 from src.engine.preprocessor import preprocess_file
@@ -161,6 +167,22 @@ async def twilio_webhook(request: Request) -> Response:
 
     # Process text body (if any, and not just media caption)
     if body and num_media == 0:
+        body_lower = body.strip().lower()
+
+        # Check for menu keyword
+        if body_lower in MENU_KEYWORDS:
+            menu_result = await handle_menu(phone)
+            await send_message(from_phone, menu_result["message"])
+            twiml = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
+            return Response(content=twiml, media_type="application/xml")
+
+        # Check for pending menu selection (numeric reply)
+        menu_selection = await handle_menu_selection(phone, body)
+        if menu_selection:
+            await send_message(from_phone, menu_selection["message"])
+            twiml = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
+            return Response(content=twiml, media_type="application/xml")
+
         result = await handle_text(phone, body)
 
         if result["action"] == "trigger":

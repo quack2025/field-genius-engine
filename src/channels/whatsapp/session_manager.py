@@ -11,12 +11,21 @@ from src.engine.supabase_client import (
     get_or_create_session,
     add_file_to_session,
     update_session_status,
+    get_user_by_phone,
+    update_user_implementation,
+    list_active_implementations,
 )
 
 logger = structlog.get_logger(__name__)
 
 # Default trigger words (fallback if DB has none)
 DEFAULT_TRIGGER_WORDS = {"reporte", "generar", "listo", "fin", "report", "done"}
+
+# Menu keywords that trigger project selection
+MENU_KEYWORDS = {"menu", "menú", "proyectos", "proyecto", "cambiar"}
+
+# In-memory state: phone → list of implementation options shown
+_pending_menu: dict[str, list[dict[str, Any]]] = {}
 
 
 async def get_trigger_words(impl_id: str) -> set[str]:
@@ -65,6 +74,60 @@ async def handle_media(
     )
 
     return session
+
+
+async def handle_menu(phone: str) -> dict[str, Any]:
+    """Show the project selection menu."""
+    implementations = await list_active_implementations()
+    if not implementations:
+        return {
+            "action": "menu_empty",
+            "message": "No hay proyectos configurados.",
+        }
+
+    _pending_menu[phone] = implementations
+
+    # Get current implementation
+    user = await get_user_by_phone(phone)
+    current = user.get("implementation", "?") if user else "?"
+
+    lines = ["*Selecciona un proyecto:*\n"]
+    for i, impl in enumerate(implementations, 1):
+        marker = " (actual)" if impl["id"] == current else ""
+        lines.append(f"{i}. {impl['name']}{marker}")
+    lines.append(f"\nResponde con el numero (1-{len(implementations)})")
+
+    return {
+        "action": "menu_shown",
+        "message": "\n".join(lines),
+    }
+
+
+async def handle_menu_selection(phone: str, choice: str) -> dict[str, Any] | None:
+    """Handle a numeric reply to the project menu. Returns None if not in menu state."""
+    if phone not in _pending_menu:
+        return None
+
+    options = _pending_menu[phone]
+    try:
+        idx = int(choice.strip()) - 1
+        if 0 <= idx < len(options):
+            selected = options[idx]
+            del _pending_menu[phone]
+            await update_user_implementation(phone, selected["id"])
+            return {
+                "action": "project_changed",
+                "message": f"Proyecto cambiado a *{selected['name']}*.\nTodo lo que envies ahora se asocia a este proyecto.",
+                "implementation": selected["id"],
+            }
+    except (ValueError, IndexError):
+        pass
+
+    # Invalid choice — show menu again
+    return {
+        "action": "menu_invalid",
+        "message": f"Opcion no valida. Responde con un numero del 1 al {len(options)}.",
+    }
 
 
 async def handle_text(

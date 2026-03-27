@@ -267,6 +267,42 @@ async def assign_user(impl_id: str, body: UserAssign) -> dict:
         raise HTTPException(status_code=400, detail=str(e))
 
 
+class SwitchUserImplRequest(BaseModel):
+    phone: str
+    new_implementation: str
+
+
+@router.post("/users/switch-implementation")
+async def switch_user_implementation(body: SwitchUserImplRequest) -> dict:
+    """Change the active implementation for a user (from backoffice)."""
+    client = get_client()
+
+    # Verify implementation exists
+    impl = client.table("implementations").select("id, name").eq("id", body.new_implementation).maybe_single().execute()
+    if not impl or not impl.data:
+        raise HTTPException(status_code=404, detail=f"Implementation '{body.new_implementation}' not found")
+
+    # Update user
+    result = client.table("users").update({
+        "implementation": body.new_implementation,
+        "implementation_id": body.new_implementation,
+    }).eq("phone", body.phone).execute()
+
+    if not result.data:
+        raise HTTPException(status_code=404, detail=f"User '{body.phone}' not found")
+
+    logger.info("user_implementation_switched", phone=body.phone, new_impl=body.new_implementation)
+    return {
+        "success": True,
+        "data": {
+            "phone": body.phone,
+            "implementation": body.new_implementation,
+            "implementation_name": impl.data["name"],
+        },
+        "error": None,
+    }
+
+
 @router.delete("/implementations/{impl_id}/users/{phone}")
 async def remove_user(impl_id: str, phone: str) -> dict:
     client = get_client()
