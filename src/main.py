@@ -49,12 +49,26 @@ app.include_router(simulate_router)
 app.include_router(admin_router)
 
 
+@app.on_event("startup")
+async def startup() -> None:
+    """Initialize Redis connection pool on startup (if configured)."""
+    if settings.redis_url:
+        from src.engine.worker import get_pool
+        pool = await get_pool()
+        if pool:
+            import structlog
+            structlog.get_logger().info("redis_connected", url=settings.redis_url[:30])
+
+
 @app.get("/health")
 async def health() -> dict:
+    from src.engine.worker import get_queue_stats
+    queue = await get_queue_stats()
     return {
         "status": "ok",
         "implementation": "field-genius-engine",
-        "version": "0.1.0",
+        "version": "0.2.0",
+        "queue": queue,
     }
 
 

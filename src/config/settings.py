@@ -26,6 +26,9 @@ class Settings(BaseSettings):
     google_spreadsheet_id: str | None = None
     gamma_api_key: str | None = None
 
+    # Redis (job queue)
+    redis_url: str = ""  # redis://default:xxx@host:port
+
     # Config
     default_implementation: str = "laundry_care"
     default_language: str = "es"
