@@ -1320,3 +1320,110 @@ async def generate_project_report_endpoint(body: ProjectReportRequest) -> dict:
     except Exception as e:
         logger.error("generate_project_report_failed", error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Retention & Usage ──────────────────────────────────────────────
+
+
+@router.post("/run-retention")
+async def run_retention_endpoint(
+    retention_days: int = 90,
+    dry_run: bool = True,
+) -> dict:
+    """Run media retention cleanup. Default is dry_run=True (preview only)."""
+    from src.engine.retention import run_retention
+    result = await run_retention(retention_days=retention_days, dry_run=dry_run)
+    return {"success": True, "data": result, "error": None}
+
+
+@router.get("/usage")
+async def get_usage(impl: str | None = None) -> dict:
+    """Get usage stats for billing/monitoring. Computed live from DB."""
+    client = get_client()
+
+    # Current month
+    now = datetime.datetime.now(datetime.UTC)
+    current_month = now.strftime("%Y-%m")
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat()
+
+    implementations: list[str] = []
+    if impl:
+        implementations = [impl]
+    else:
+        result = client.table("implementations").select("id").eq("status", "active").execute()
+        implementations = [r["id"] for r in (result.data or [])]
+
+    usage_data = []
+    for impl_id in implementations:
+        # Sessions this month
+        sessions = (
+            client.table("sessions")
+            .select("id, raw_files, user_phone, status")
+            .eq("implementation", impl_id)
+            .gte("created_at", month_start)
+            .execute()
+        )
+        session_list = sessions.data or []
+
+        # Count files by type
+        total_files = 0
+        images = 0
+        audio = 0
+        video = 0
+        text = 0
+        total_bytes = 0
+        active_phones: set[str] = set()
+
+        for s in session_list:
+            active_phones.add(s.get("user_phone", ""))
+            for f in (s.get("raw_files") or []):
+                total_files += 1
+                total_bytes += f.get("size_bytes", 0)
+                ft = f.get("type", "")
+                if ft == "image":
+                    images += 1
+                elif ft == "audio":
+                    audio += 1
+                elif ft == "video":
+                    video += 1
+                elif ft == "text":
+                    text += 1
+
+        # Reports this month
+        reports = (
+            client.table("session_facts")
+            .select("id", count="exact")
+            .eq("implementation_id", impl_id)
+            .gte("created_at", month_start)
+            .execute()
+        )
+        report_count = reports.count or 0
+
+        usage_data.append({
+            "implementation_id": impl_id,
+            "month": current_month,
+            "active_users": len(active_phones),
+            "total_sessions": len(session_list),
+            "total_files": total_files,
+            "images": images,
+            "audio": audio,
+            "video": video,
+            "text": text,
+            "total_bytes": total_bytes,
+            "total_mb": round(total_bytes / (1024 * 1024), 1),
+            "reports_generated": report_count,
+        })
+
+    # Queue stats
+    from src.engine.worker import get_queue_stats
+    queue = await get_queue_stats()
+
+    return {
+        "success": True,
+        "data": {
+            "month": current_month,
+            "implementations": usage_data,
+            "queue": queue,
+        },
+        "error": None,
+    }
