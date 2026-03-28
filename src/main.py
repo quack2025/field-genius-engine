@@ -66,8 +66,11 @@ async def startup() -> None:
 
 @app.get("/health")
 async def health() -> dict:
-    from src.engine.worker import get_queue_stats
-    queue = await get_queue_stats()
+    try:
+        from src.engine.worker import get_queue_stats
+        queue = await get_queue_stats()
+    except Exception:
+        queue = {"status": "error"}
     return {
         "status": "ok",
         "implementation": "field-genius-engine",
