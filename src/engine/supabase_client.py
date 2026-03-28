@@ -62,7 +62,10 @@ async def get_or_create_session(
         else settings.default_implementation
     )
 
-    # Create new session with implementation from user record
+    # Create new session with implementation, country, and role from user record
+    user_country = user.get("country", "") if user else ""
+    user_role = user.get("role", "field_agent") if user else "field_agent"
+
     new_session = {
         "user_phone": phone,
         "user_name": user_name,
@@ -70,6 +73,8 @@ async def get_or_create_session(
         "status": "accumulating",
         "raw_files": [],
         "implementation": impl_id,
+        "country": user_country,
+        "user_role": user_role,
     }
     result = client.table("sessions").insert(new_session).execute()
     logger.info("session_created", session_id=result.data[0]["id"])

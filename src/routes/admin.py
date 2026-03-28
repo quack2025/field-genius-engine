@@ -10,11 +10,19 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from src.config.settings import settings
-from src.engine.supabase_client import get_client
+from src.engine.supabase_client import get_client, get_user_by_phone
 
 logger = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
+
+
+async def get_user_by_phone_or_none(phone: str) -> dict | None:
+    """Safe wrapper for get_user_by_phone."""
+    try:
+        return await get_user_by_phone(phone)
+    except Exception:
+        return None
 
 
 # ── Pydantic models ──────────────────────────────────────────────
@@ -521,6 +529,83 @@ async def test_vision_prompt(body: TestVisionRequest) -> dict:
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class BulkImportRequest(BaseModel):
+    implementation_id: str
+    users: list[dict[str, Any]]  # [{phone, name, role?, country?, group_slug?}]
+
+
+@router.post("/bulk-import-users")
+async def bulk_import_users(body: BulkImportRequest) -> dict:
+    """Bulk import users from a list (CSV-parsed on frontend).
+
+    Each user dict: { phone, name, role?, country?, group_slug? }
+    Upserts by phone — updates existing, creates new.
+    """
+    client = get_client()
+    created = 0
+    updated = 0
+    errors: list[str] = []
+
+    # Pre-load groups for this implementation
+    groups_result = (
+        client.table("user_groups")
+        .select("id, slug")
+        .eq("implementation_id", body.implementation_id)
+        .execute()
+    )
+    group_map = {g["slug"]: g["id"] for g in (groups_result.data or [])}
+
+    for i, u in enumerate(body.users):
+        phone = u.get("phone", "").strip()
+        name = u.get("name", "").strip()
+        if not phone or not name:
+            errors.append(f"Row {i+1}: missing phone or name")
+            continue
+
+        # Normalize phone (ensure +)
+        if not phone.startswith("+"):
+            phone = f"+{phone}"
+
+        group_id = None
+        group_slug = u.get("group_slug", "").strip()
+        if group_slug and group_slug in group_map:
+            group_id = group_map[group_slug]
+
+        row = {
+            "phone": phone,
+            "name": name,
+            "implementation": body.implementation_id,
+            "implementation_id": body.implementation_id,
+            "role": u.get("role", "field_agent").strip(),
+            "country": u.get("country", "").strip(),
+        }
+        if group_id:
+            row["group_id"] = group_id
+
+        try:
+            # Check if exists
+            existing = client.table("users").select("id").eq("phone", phone).maybe_single().execute()
+            if existing and existing.data:
+                client.table("users").update(row).eq("phone", phone).execute()
+                updated += 1
+            else:
+                client.table("users").insert(row).execute()
+                created += 1
+        except Exception as e:
+            errors.append(f"Row {i+1} ({phone}): {str(e)[:100]}")
+
+    return {
+        "success": len(errors) == 0,
+        "data": {
+            "created": created,
+            "updated": updated,
+            "errors": errors,
+            "total_processed": created + updated,
+        },
+        "error": f"{len(errors)} errors" if errors else None,
+    }
+
+
 @router.post("/trigger-pipeline/{session_id}")
 async def trigger_pipeline(session_id: str) -> dict:
     """Manually trigger the pipeline for a session. Resets status to accumulating first."""
@@ -647,8 +732,15 @@ async def generate_report_endpoint(body: GenerateReportRequest) -> dict:
 
         from src.engine.analyzer import generate_report, generate_all_reports, extract_facts, _build_observations_context
 
+        # Resolve country context from session or user
+        user_country = session.get("country", "")
+        if not user_country:
+            user = await get_user_by_phone_or_none(session.get("user_phone", ""))
+            user_country = user.get("country", impl_config.country) if user else impl_config.country
+        cc = impl_config.get_country_context(user_country)
+
         if body.report_type == "all":
-            results = await generate_all_reports(session, frameworks, impl_config.name)
+            results = await generate_all_reports(session, frameworks, impl_config.name, country_context=cc)
             # Save each to DB + extract facts for aggregation
             saved = {}
             obs_text = _build_observations_context(session)
@@ -698,6 +790,7 @@ async def generate_report_endpoint(body: GenerateReportRequest) -> dict:
                 report_type=body.report_type,
                 framework_config=frameworks[body.report_type],
                 implementation_name=impl_config.name,
+                country_context=cc,
             )
 
             report_id = None

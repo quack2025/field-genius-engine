@@ -35,7 +35,16 @@ class ImplementationConfig:
     google_spreadsheet_id: str | None = None
     trigger_words: list[str] = field(default_factory=lambda: ["reporte", "generar", "listo", "fin"])
     analysis_framework: dict[str, Any] | None = None
+    country_config: dict[str, Any] = field(default_factory=dict)
     visit_types: dict[str, VisitTypeConfig] = field(default_factory=dict)
+
+    def get_country_context(self, country_code: str) -> dict[str, Any]:
+        """Get country-specific config. Falls back to first available or empty."""
+        if country_code in self.country_config:
+            return self.country_config[country_code]
+        if self.country_config:
+            return next(iter(self.country_config.values()))
+        return {}
 
 
 # Module-level cache
@@ -146,6 +155,7 @@ async def _load_from_db(impl_id: str) -> ImplementationConfig | None:
             google_spreadsheet_id=row.get("google_spreadsheet_id"),
             trigger_words=trigger_words,
             analysis_framework=row.get("analysis_framework"),
+            country_config=row.get("country_config") or {},
         )
 
         # Load visit types

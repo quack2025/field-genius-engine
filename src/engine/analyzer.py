@@ -81,6 +81,7 @@ async def generate_report(
     report_type: str,
     framework_config: dict[str, Any],
     implementation_name: str = "",
+    country_context: dict[str, Any] | None = None,
 ) -> str | None:
     """Generate a report for a session using a specific framework type.
 
@@ -128,13 +129,31 @@ async def generate_report(
     user_phone = session.get("user_phone", "")
     user_name = session.get("user_name", "")
     session_date = session.get("date", "")
+    user_role = session.get("user_role", "field_agent")
+    country = session.get("country", "")
     file_count = len(session.get("raw_files", []))
+
+    # Build country context block
+    country_block = ""
+    if country_context:
+        cc = country_context
+        competitors = ", ".join(cc.get("competitors", []))
+        products = ", ".join(cc.get("products", []))
+        country_block = f"""
+CONTEXTO DEL MERCADO ({cc.get('country_name', country)}):
+- Moneda: {cc.get('currency', '')} ({cc.get('currency_symbol', '')})
+- Competidores principales: {competitors}
+- Productos/servicios: {products}
+- {cc.get('context', '')}
+"""
 
     prompt = f"""CONTEXTO DE LA SESION
 - Operacion: {implementation_name}
-- Ejecutivo: {user_name} ({user_phone})
+- Ejecutivo: {user_name} ({user_phone}) — Rol: {user_role}
+- Pais: {country}
 - Fecha: {session_date}
 - Archivos capturados: {file_count}
+{country_block}
 
 OBSERVACIONES DE CAMPO (descripcion de cada foto, transcripcion de audios, notas de texto):
 
@@ -193,6 +212,7 @@ async def generate_all_reports(
     session: dict[str, Any],
     frameworks: dict[str, Any],
     implementation_name: str = "",
+    country_context: dict[str, Any] | None = None,
 ) -> dict[str, str | None]:
     """Generate all configured report types for a session.
 
@@ -215,6 +235,7 @@ async def generate_all_reports(
             report_type=report_type,
             framework_config=config,
             implementation_name=implementation_name,
+            country_context=country_context,
         )
 
     # Run all in parallel
