@@ -11,11 +11,13 @@ Field executives and managers who send media via WhatsApp.
 | Column | Type | Notes |
 |--------|------|-------|
 | id | uuid PK | auto-generated |
-| implementation | text | 'argos', 'eficacia' (legacy field) |
+| implementation | text | 'laundry_care', 'telecable' (legacy field) |
 | implementation_id | text FK → implementations | Added by migration 002 |
 | phone | text UNIQUE | WhatsApp number for lookup (e.g. +573001234567) |
 | name | text | |
 | role | text | 'executive' or 'manager' |
+| group_id | uuid FK → user_groups | Zone/team group assignment |
+| tags | text[] | DEFAULT '{}' — flexible tags |
 | notification_group | text | WhatsApp group ID for shared reports |
 | created_at | timestamptz | |
 
@@ -48,7 +50,9 @@ Also: `needs_clarification`, `failed`
   "content_type": "image/jpeg",
   "size_bytes": 245680,
   "timestamp": "2026-03-12T10:15:00+00:00",
-  "body": "text content here"  // only for type=text|clarification_response
+  "body": "text content here",             // only for type=text|clarification_response
+  "transcription": "transcribed text...",   // pre-processed Whisper output (audio/video)
+  "image_description": "Vision AI output..."  // pre-processed Claude Vision output (image)
 }
 ```
 
@@ -83,11 +87,12 @@ Client configurations — each implementation = one customer.
 | language | text | DEFAULT 'es' |
 | logo_url | text | |
 | primary_color | text | DEFAULT '#003366' |
-| status | text | CHECK: active, paused, archived |
+| status | text | CHECK: active, inactive, archived |
 | vision_system_prompt | text | What to look for in photos |
 | segmentation_prompt_template | text | How to group visits |
 | google_spreadsheet_id | text | |
 | trigger_words | jsonb | DEFAULT ["reporte","generar","listo","fin"] |
+| analysis_framework | jsonb | Frameworks config (see implementations.md) |
 | created_at, updated_at | timestamptz | |
 
 ### visit_types
@@ -120,6 +125,45 @@ Admin access control for backoffice.
 | allowed_implementations | text[] | |
 | created_at | timestamptz | |
 
+### user_groups
+Zone/team-based grouping for multi-level report aggregation.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| id | uuid PK | |
+| implementation_id | text FK → implementations | |
+| name | text | e.g. 'Zona San Jose' |
+| slug | text | e.g. 'zona_san_jose' |
+| zone | text | Geographic zone |
+| tags | text[] | DEFAULT '{}' |
+| created_at | timestamptz | |
+
+### session_facts
+Structured facts extracted from reports — enables aggregation without re-reading raw media.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| id | uuid PK | |
+| session_id | uuid FK → sessions | |
+| implementation_id | text | |
+| framework | text | 'tactical', 'competidor', etc. |
+| facts | jsonb | Structured extraction (entities, prices, alerts, sentiment) |
+| key_quotes | text[] | Top 3-5 representative quotes |
+| fact_count | integer | DEFAULT 0 |
+| created_at | timestamptz | |
+
+**facts JSONB structure:**
+```json
+{
+  "entities_mentioned": [{"name": "Claro", "type": "competitor", "count": 3, "context": "promo agresiva"}],
+  "prices_detected": [{"entity": "Claro", "item": "Internet 100Mbps", "price": 15000, "currency": "CRC"}],
+  "alerts": [{"type": "competitive_threat", "severity": "high", "description": "...", "zone": "Heredia"}],
+  "sentiment": {"positive": 2, "negative": 5, "neutral": 1},
+  "zones_covered": ["Heredia"],
+  "key_themes": ["pricing", "churn"]
+}
+```
+
 ## Supabase Storage
 
 - **Bucket:** `media` (private)
@@ -128,6 +172,16 @@ Admin access control for backoffice.
 
 ## Current Data
 
-- 2 implementations: `argos` (construction), `eficacia` (FMCG)
-- 5 visit types: 3 argos (ferreteria, obra_civil, obra_pequena), 2 eficacia (supermarket_visit, wholesale_visit)
+- 2 active implementations: `laundry_care` (CPG), `telecable` (Telecom) — `argos` is inactive
+- 7 visit types: 4 laundry_care, 3 telecable
 - Admin user: jorgealejandrorosales@gmail.com
+
+## Migrations
+
+| File | Description |
+|------|-------------|
+| `sql/schema.sql` | Base tables (users, sessions, visit_reports) |
+| `sql/002_multi_tenant.sql` | implementations, visit_types, backoffice_users |
+| `sql/006_laundry_care.sql` | Laundry care implementation + 3 frameworks |
+| `sql/007_telecable.sql` | Telecable implementation + 3 frameworks |
+| `sql/008_user_groups_and_facts.sql` | user_groups, session_facts, users.group_id |

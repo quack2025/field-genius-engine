@@ -23,7 +23,9 @@
 | `/implementations` | Implementations | Card grid with create form |
 | `/implementations/:id` | ImplementationDetail | 4 tabs: Config, Visit Types, Prompts, Users |
 | `/sessions` | Sessions | Filterable table (impl, status, dates) |
-| `/sessions/:id` | SessionDetail | Media timeline + visit reports panel |
+| `/sessions/:id` | SessionDetail | Media timeline + report generation buttons (3 frameworks) |
+| `/reports` | Reports | Multi-level report generation: Individual / Grupo / Proyecto tabs |
+| `/user-groups` | UserGroups | CRUD for groups + member management |
 
 ## API Client (`src/lib/api.ts`)
 
@@ -32,7 +34,7 @@ All calls go to `VITE_API_URL` (Railway backend). Response wrapper:
 interface ApiResponse<T> { success: boolean; data: T; error: string | null; }
 ```
 
-Key interfaces: `Implementation`, `VisitType`, `User`, `Stats`, `Session`, `RawFile`, `VisitReport`
+Key interfaces: `Implementation`, `VisitType`, `User`, `Stats`, `Session`, `RawFile`, `VisitReport`, `UserGroup`, `GenerateReportResponse`, `MultiLevelReportResponse`
 
 ## Auth
 

@@ -2,60 +2,85 @@
 
 ## Current Implementations
 
-### Argos (construction)
+### Laundry Care — Cuidado de la Ropa (CPG demo)
+- **ID:** `laundry_care`
+- **Industry:** CPG (detergents, softeners, stain removers)
+- **Status:** active (default)
+- **Visit types:** supermarket_visit, drugstore_visit, tienda_barrio, hard_discount
+- **Analysis frameworks (3):**
+  - `tactical` — Execution audit: availability, pricing, promotions, shelf share, execution score
+  - `strategic` — Babson Pentagon: shopper, value proposition, revenue model, delivery, ecosystem
+  - `innovation` — Gaps, trends, packaging/comms, shopper friction, innovation roadmap
+- **Vision prompt:** 9-dimension retail analysis (productos, share of shelf, posicion, promos, estado anaquel, innovacion, exhibiciones, competencia, comunicacion)
+- **Seeded via:** `sql/006_laundry_care.sql`
+
+### Telecable (Telecom)
+- **ID:** `telecable`
+- **Industry:** Telecom (cable/internet provider, Costa Rica)
+- **Status:** active
+- **Visit types:** visita_campo, atencion_cliente, instalacion
+- **Analysis frameworks (3):**
+  - `competidor` (C1) — Competitive intelligence: competitor presence, promotions, pricing, threats
+  - `cliente` (C2) — Customer experience: satisfaction, pain points, churn risk, NPS signals
+  - `comunicacion` (C3) — Brand communication: visibility, messaging, POP effectiveness
+- **Seeded via:** `sql/007_telecable.sql`
+
+### Argos (Construction) — INACTIVE
 - **ID:** `argos`
 - **Industry:** construction (cement company)
-- **Visit types:** ferreteria (3 cats), obra_civil, obra_pequena
-- **Vision prompt:** 6-dimension analysis (tipo de toma, presencia institucional, presencia producto, precios, competencia, perfil del punto)
+- **Status:** inactive (legacy, first implementation)
+- **Visit types:** ferreteria, obra_civil, obra_pequena
 - **Schema files (legacy):** `src/implementations/argos/schemas/*.json`
-- **DB seeded:** Yes (implementations + visit_types tables)
 
-### Eficacia (FMCG/retail promoters)
-- **ID:** `eficacia`
-- **Industry:** fmcg (supermarket promoters/merchandisers)
-- **Visit types:**
-  - `supermarket_visit` — 5 categories: share_of_shelf, precios, exhibiciones_especiales, actividad_competencia, perfil_punto
-  - `wholesale_visit` — 4 categories: inventario_visible, precios_mayorista, actividad_competencia, relacion_comercial
-- **Vision prompt:** Retail-specific (gondola, share of shelf, facings, POP material)
-- **Seeded via:** `scripts/seed_eficacia.py` (requires SUPABASE_SERVICE_ROLE_KEY env var)
+## Analysis Framework Structure
 
-## Schema Structure
-
-Each visit type has a JSON schema that drives AI extraction:
+Each implementation stores its frameworks in the `analysis_framework` JSONB column:
 
 ```json
 {
-  "implementation": "argos",
-  "visit_type": "ferreteria",
-  "display_name": "Visita a Ferreteria",
-  "description": "...",
-  "primary_media": ["image", "voice"],
-  "categories": [
-    {
-      "id": "precios",
-      "label": "Precios capturados",
-      "description": "...",
-      "fields": [
-        {"id": "producto", "type": "string", "label": "Producto"},
-        {"id": "precio", "type": "number", "label": "Precio COP"}
-      ],
-      "is_array": true,        // can have multiple entries
-      "applies_to": ["image", "voice"]  // which media types extract this
-    }
-  ],
-  "confidence_threshold": 0.7,
-  "sheets_tab": "Ferreterias"
+  "frameworks": {
+    "tactical": {
+      "id": "tactical",
+      "name": "Reporte Tactico de Ejecucion",
+      "model": "claude-sonnet-4-20250514",
+      "system_prompt": "Eres un auditor senior...",
+      "sections": [
+        {"id": "availability", "label": "Disponibilidad y Agotados", "prompt": "Analiza..."},
+        {"id": "pricing", "label": "Precios y Competitividad", "prompt": "..."}
+      ]
+    },
+    "strategic": { ... },
+    "innovation": { ... }
+  }
 }
 ```
 
-`schema_builder.py` converts this JSON into a Claude system prompt dynamically.
+The `sections` array drives report generation — each section becomes a `## heading` in the markdown output.
+
+## WhatsApp Menu — Implementation Switching
+
+Users can switch between implementations by sending "menu" (or "proyecto", "cambiar") via WhatsApp:
+
+```
+User: menu
+Bot: *Selecciona un proyecto:*
+     1. Cuidado de la Ropa (actual)
+     2. Telecable
+     Responde con el numero (1-2)
+User: 2
+Bot: Proyecto cambiado a *Telecable*.
+     Todo lo que envies ahora se asocia a este proyecto.
+```
+
+State is persisted in the `users` table (`implementation` + `implementation_id` columns).
 
 ## Adding a New Implementation
 
-1. Create in backoffice (or `POST /api/admin/implementations`)
-2. Define visit types with schemas
-3. Write vision_system_prompt (what to look for in photos)
-4. Write segmentation_prompt_template (how to group visits)
-5. Assign user phones
-6. Create Google Spreadsheet + share with service account
-7. Test end-to-end via WhatsApp or `/api/simulate`
+1. Create SQL migration with INSERT into `implementations` (include `analysis_framework` JSONB)
+2. Define visit types in same migration
+3. Write `vision_system_prompt` (what to look for in photos)
+4. Define framework sections with prompts
+5. Run migration in Supabase SQL Editor
+6. `POST /api/admin/reload-config` to refresh cache
+7. Assign user phones via backoffice or API
+8. Test: send photos via WhatsApp → generate report from backoffice

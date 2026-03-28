@@ -387,7 +387,7 @@ GOOGLE_SPREADSHEET_ID=   # ID del Sheet de Argos
 GAMMA_API_KEY=           # Gamma para presentaciones
 
 # Config
-DEFAULT_IMPLEMENTATION=argos
+DEFAULT_IMPLEMENTATION=laundry_care
 DEFAULT_LANGUAGE=es
 NODE_ENV=production
 ```
@@ -412,8 +412,9 @@ El Critic es especialmente importante en:
 
 | Implementación | Cliente | Tipos de visita | Estado |
 |----------------|---------|-----------------|--------|
-| `argos` | Argos (cementos) | ferreteria, obra_civil, obra_pequeña | 🚧 En construcción |
-| `eficacia` | Eficacia (impulsadoras) | supermarket_visit | ⏳ Migrar desde field-genius repo |
+| `argos` | Argos (cementos) | ferreteria, obra_civil, obra_pequeña | ❌ Inactive (legacy) |
+| `laundry_care` | Cuidado de la Ropa (CPG demo) | supermarket, drugstore, TAT, hard_discount | ✅ Active (default) |
+| `telecable` | Telecable (Telecom CR) | visita_campo, atencion_cliente, instalacion | ✅ Active |
 
 ---
 
@@ -436,35 +437,22 @@ Para contexto completo del proyecto (arquitectura, DB schema, endpoints, pipelin
 
 ## Sprints planificados
 
-### Sprint 1 — Fundación (~2h)
-- Setup FastAPI + Pydantic Settings
-- Schema Supabase + seed data Argos (3 ejecutivos de prueba)
-- Servicio Supabase básico
-- Health check + test-db endpoints
+### Sprints 1-5 — COMPLETED
+Foundation, WhatsApp ingestion, pipeline, outputs, deploy to Railway.
 
-### Sprint 2 — WhatsApp Ingestion (~3h)
-- Webhook WhatsApp (verificación + recepción de mensajes)
-- Descarga de media (fotos, audio, video) a Supabase Storage
-- Session manager: acumular media por usuario/día
-- Respuestas básicas ("Recibido 📸")
+### Sprint 6 — Pre-processing + Backoffice
+- Pre-process media at ingestion (Vision AI + Whisper in background)
+- Backoffice frontend (Vercel): Dashboard, Implementations, Sessions
 
-### Sprint 3 — Pipeline de análisis (~4h)
-- Transcriber (Whisper)
-- Vision analyzer (Claude Sonnet + fotos)
-- Video processor (ffmpeg → frames + audio)
-- Segmenter (Fase 1: identificar visitas en el batch)
-- Schema builder (JSON config → system prompt)
-- Extractor (Fase 2: extracción estructurada por visita)
+### Sprint 7 — Multi-Implementation + Laundry Care Demo
+- `laundry_care` implementation with 3 analysis frameworks (tactical/strategic/innovation)
+- `telecable` implementation with 3 frameworks (competidor/cliente/comunicacion)
+- WhatsApp menu for implementation switching ("menu" → select project)
+- On-demand report generation from backoffice (not WhatsApp trigger)
 
-### Sprint 4 — Outputs (~3h)
-- Google Sheets writer (columnas dinámicas desde schema)
-- Gamma API integration (presentación auto-generada)
-- PDF generator (WeasyPrint)
-- Respuesta final al ejecutivo via WhatsApp
-
-### Sprint 5 — Polish (~2h)
-- Flujo de clarificación (cuando segmentación tiene dudas)
-- Publicación en grupo de resultados
-- Error handling robusto
-- Tests del pipeline con datos reales de Argos
-- Deploy a Railway
+### Sprint 8 — Multi-Level Reports + User Groups
+- User groups (zone-based grouping)
+- Session facts extraction (structured data for aggregation)
+- Group-level and project-level report generation
+- Reports page in backoffice (Individual / Grupo / Proyecto tabs)
+- User Groups page in backoffice (CRUD + member management)
