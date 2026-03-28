@@ -39,9 +39,10 @@
 |----------|---------|-------|
 | Supabase Pro | $25 | $300 |
 | Railway Pro | $20 | $240 |
+| Vercel Pro (backoffice) | $20 | $240 |
 | Dominio + DNS | $15 | $180 |
 | WhatsApp Cloud API (base) | $50 | $600 |
-| **Total** | **$110** | **$1,320** |
+| **Total** | **$130** | **$1,560** |
 
 ### Costos variables por tier
 
