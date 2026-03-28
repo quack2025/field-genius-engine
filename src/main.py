@@ -53,11 +53,15 @@ app.include_router(admin_router)
 async def startup() -> None:
     """Initialize Redis connection pool on startup (if configured)."""
     if settings.redis_url:
-        from src.engine.worker import get_pool
-        pool = await get_pool()
-        if pool:
+        try:
+            from src.engine.worker import get_pool
+            pool = await get_pool()
+            if pool:
+                import structlog
+                structlog.get_logger().info("redis_connected", url=settings.redis_url[:30])
+        except Exception as e:
             import structlog
-            structlog.get_logger().info("redis_connected", url=settings.redis_url[:30])
+            structlog.get_logger().warning("redis_startup_failed_continuing_without", error=str(e))
 
 
 @app.get("/health")
