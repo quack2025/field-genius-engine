@@ -44,7 +44,7 @@ SELECT
   '{}',  -- superadmin sees all, empty = no filter
   true
 FROM auth.users
-WHERE email = 'jorgealejandrorosales@gmail.com'
+WHERE email = 'jorge.rosales@xponencial.net'
 ON CONFLICT (id) DO UPDATE SET
   role = 'superadmin',
   name = 'Jorge Rosales',
@@ -124,8 +124,7 @@ END $$;
 
 -- IMPLEMENTATIONS: superadmin sees all, others see allowed
 CREATE POLICY impl_select ON implementations FOR SELECT USING (
-  get_backoffice_role(auth.uid()) = 'superadmin'
-  OR id = ANY((SELECT allowed_implementations FROM backoffice_users WHERE id = auth.uid()))
+  user_has_impl_access(auth.uid(), id)
 );
 CREATE POLICY impl_modify ON implementations FOR ALL USING (
   get_backoffice_role(auth.uid()) IN ('superadmin', 'admin')
@@ -134,14 +133,12 @@ CREATE POLICY impl_modify ON implementations FOR ALL USING (
 
 -- SESSIONS: filtered by implementation access
 CREATE POLICY sessions_select ON sessions FOR SELECT USING (
-  get_backoffice_role(auth.uid()) = 'superadmin'
-  OR user_has_impl_access(auth.uid(), implementation)
+  user_has_impl_access(auth.uid(), implementation)
 );
 
 -- USERS (field users): filtered by implementation
 CREATE POLICY users_select ON users FOR SELECT USING (
-  get_backoffice_role(auth.uid()) = 'superadmin'
-  OR user_has_impl_access(auth.uid(), implementation)
+  user_has_impl_access(auth.uid(), implementation)
 );
 CREATE POLICY users_modify ON users FOR ALL USING (
   get_backoffice_role(auth.uid()) IN ('superadmin', 'admin')
@@ -150,14 +147,12 @@ CREATE POLICY users_modify ON users FOR ALL USING (
 
 -- VISIT_REPORTS: follow session access
 CREATE POLICY vr_select ON visit_reports FOR SELECT USING (
-  get_backoffice_role(auth.uid()) = 'superadmin'
-  OR user_has_impl_access(auth.uid(), implementation)
+  user_has_impl_access(auth.uid(), implementation)
 );
 
 -- VISIT_TYPES: follow implementation access
 CREATE POLICY vt_select ON visit_types FOR SELECT USING (
-  get_backoffice_role(auth.uid()) = 'superadmin'
-  OR user_has_impl_access(auth.uid(), implementation_id)
+  user_has_impl_access(auth.uid(), implementation_id)
 );
 CREATE POLICY vt_modify ON visit_types FOR ALL USING (
   get_backoffice_role(auth.uid()) IN ('superadmin', 'admin')
@@ -166,8 +161,7 @@ CREATE POLICY vt_modify ON visit_types FOR ALL USING (
 
 -- USER_GROUPS: follow implementation access
 CREATE POLICY ug_select ON user_groups FOR SELECT USING (
-  get_backoffice_role(auth.uid()) = 'superadmin'
-  OR user_has_impl_access(auth.uid(), implementation_id)
+  user_has_impl_access(auth.uid(), implementation_id)
 );
 CREATE POLICY ug_modify ON user_groups FOR ALL USING (
   get_backoffice_role(auth.uid()) IN ('superadmin', 'admin')
@@ -176,14 +170,12 @@ CREATE POLICY ug_modify ON user_groups FOR ALL USING (
 
 -- SESSION_FACTS: follow implementation access
 CREATE POLICY sf_select ON session_facts FOR SELECT USING (
-  get_backoffice_role(auth.uid()) = 'superadmin'
-  OR user_has_impl_access(auth.uid(), implementation_id)
+  user_has_impl_access(auth.uid(), implementation_id)
 );
 
 -- CONSOLIDATED_REPORTS: follow implementation access
 CREATE POLICY cr_select ON consolidated_reports FOR SELECT USING (
-  get_backoffice_role(auth.uid()) = 'superadmin'
-  OR user_has_impl_access(auth.uid(), implementation_id)
+  user_has_impl_access(auth.uid(), implementation_id)
 );
 
 -- BACKOFFICE_USERS: only superadmin can see all, others see themselves
