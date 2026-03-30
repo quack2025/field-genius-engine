@@ -6,7 +6,7 @@ import datetime
 from typing import Any
 
 import structlog
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from src.config.settings import settings
@@ -1320,6 +1320,95 @@ async def generate_project_report_endpoint(body: ProjectReportRequest) -> dict:
     except Exception as e:
         logger.error("generate_project_report_failed", error=str(e))
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Backoffice User Management ─────────────────────────────────────
+
+
+class BackofficeUserCreate(BaseModel):
+    email: str
+    name: str
+    role: str = "admin"  # superadmin, admin, analyst, viewer
+    allowed_implementations: list[str] = []
+    permissions: dict[str, bool] = {}
+
+
+@router.get("/backoffice-users")
+async def list_backoffice_users_endpoint() -> dict:
+    """List all backoffice users. Superadmin only."""
+    from src.routes.auth import list_backoffice_users
+    users = await list_backoffice_users()
+    return {"success": True, "data": users, "error": None}
+
+
+@router.post("/backoffice-users")
+async def create_backoffice_user_endpoint(body: BackofficeUserCreate) -> dict:
+    """Create or update a backoffice user. Creates auth.users record if needed."""
+    try:
+        from src.routes.auth import create_backoffice_user
+        user = await create_backoffice_user(
+            email=body.email,
+            name=body.name,
+            role=body.role,
+            allowed_implementations=body.allowed_implementations,
+            permissions=body.permissions,
+        )
+        return {"success": True, "data": user, "error": None}
+    except Exception as e:
+        logger.error("create_backoffice_user_failed", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.put("/backoffice-users/{user_id}")
+async def update_backoffice_user_endpoint(user_id: str, body: dict[str, Any]) -> dict:
+    """Update a backoffice user's role, permissions, or allowed implementations."""
+    client = get_client()
+    allowed_fields = {"role", "name", "allowed_implementations", "permissions", "is_active"}
+    updates = {k: v for k, v in body.items() if k in allowed_fields}
+    if not updates:
+        raise HTTPException(status_code=400, detail="No valid fields to update")
+
+    client.table("backoffice_users").update(updates).eq("id", user_id).execute()
+    result = client.table("backoffice_users").select("*").eq("id", user_id).maybe_single().execute()
+    return {"success": True, "data": result.data, "error": None}
+
+
+@router.get("/my-profile")
+async def get_my_profile(request: Request) -> dict:
+    """Get the current user's backoffice profile (role, permissions, implementations)."""
+    try:
+        from src.routes.auth import get_current_user
+        user = await get_current_user(request)
+        from src.routes.auth import ROLE_PERMISSIONS
+        effective_perms = ROLE_PERMISSIONS.get(user.role, {}).copy()
+        effective_perms.update(user.permissions)
+
+        return {
+            "success": True,
+            "data": {
+                "id": user.id,
+                "email": user.email,
+                "name": user.name,
+                "role": user.role,
+                "is_superadmin": user.is_superadmin,
+                "allowed_implementations": user.allowed_implementations,
+                "permissions": effective_perms,
+            },
+            "error": None,
+        }
+    except Exception:
+        # If auth fails, return unauthenticated profile (backwards compat during transition)
+        from src.routes.auth import ROLE_PERMISSIONS
+        return {
+            "success": True,
+            "data": {
+                "role": "superadmin",
+                "is_superadmin": True,
+                "allowed_implementations": [],
+                "permissions": ROLE_PERMISSIONS.get("superadmin", {}),
+            },
+            "error": None,
+        }
 
 
 # ── Retention & Usage ──────────────────────────────────────────────
