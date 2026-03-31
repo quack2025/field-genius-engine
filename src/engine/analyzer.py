@@ -17,6 +17,17 @@ from src.config.settings import settings
 
 logger = structlog.get_logger(__name__)
 
+# Singleton Anthropic client — reused across all report generations
+_anthropic_client: AsyncAnthropic | None = None
+
+
+def get_anthropic_client() -> AsyncAnthropic:
+    """Get or create a singleton AsyncAnthropic client."""
+    global _anthropic_client
+    if _anthropic_client is None:
+        _anthropic_client = AsyncAnthropic(api_key=settings.anthropic_api_key, timeout=180.0)
+    return _anthropic_client
+
 
 def _build_observations_context(session: dict[str, Any]) -> str:
     """Build consolidated context from all media in a session.
@@ -171,7 +182,7 @@ FORMATO: Responde en Markdown bien estructurado con headers ##, bullets, y **neg
 Incluye un resumen ejecutivo de 3-5 lineas al inicio del reporte."""
 
     try:
-        client = AsyncAnthropic(api_key=settings.anthropic_api_key, timeout=180.0)
+        client = get_anthropic_client()
         message = await client.messages.create(
             model=model,
             max_tokens=8192,
@@ -302,7 +313,7 @@ Responde UNICAMENTE con JSON valido con esta estructura:
 Si no hay datos para una categoria, usa lista vacia []. No inventes datos."""
 
     try:
-        client = AsyncAnthropic(api_key=settings.anthropic_api_key, timeout=60.0)
+        client = get_anthropic_client()
         message = await client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=2048,
@@ -448,7 +459,7 @@ FORMATO: Markdown profesional. Resumen ejecutivo de 5 lineas al inicio. Usa tabl
 
     try:
         system = framework_config.get("system_prompt", "")
-        client = AsyncAnthropic(api_key=settings.anthropic_api_key, timeout=180.0)
+        client = get_anthropic_client()
         message = await client.messages.create(
             model=framework_config.get("model", "claude-sonnet-4-20250514"),
             max_tokens=10000,
@@ -527,7 +538,7 @@ FORMATO: Markdown ejecutivo. Executive Summary de 5-7 lineas. Tablas comparativa
 
     try:
         system = framework_config.get("system_prompt", "")
-        client = AsyncAnthropic(api_key=settings.anthropic_api_key, timeout=180.0)
+        client = get_anthropic_client()
         message = await client.messages.create(
             model=framework_config.get("model", "claude-sonnet-4-20250514"),
             max_tokens=12000,

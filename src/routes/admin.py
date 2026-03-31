@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import datetime
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+
+limiter = Limiter(key_func=get_remote_address)
 from typing import Any
 
 import ipaddress
@@ -527,7 +531,8 @@ async def reload_config(impl_id: str | None = None, user: BackofficeUser = Depen
 
 
 @router.post("/test-vision-prompt")
-async def test_vision_prompt(body: TestVisionRequest, user: BackofficeUser = Depends(require_permission("can_edit_prompts"))) -> dict:
+@limiter.limit("10/minute")
+async def test_vision_prompt(request: Request, body: TestVisionRequest, user: BackofficeUser = Depends(require_permission("can_edit_prompts"))) -> dict:
     """Test a vision prompt against an image URL. Returns the AI description."""
     try:
         import anthropic
@@ -664,7 +669,8 @@ async def bulk_import_users(body: BulkImportRequest, user: BackofficeUser = Depe
 
 
 @router.post("/trigger-pipeline/{session_id}")
-async def trigger_pipeline(session_id: str, user: BackofficeUser = Depends(get_current_user)) -> dict:
+@limiter.limit("5/minute")
+async def trigger_pipeline(request: Request, session_id: str, user: BackofficeUser = Depends(get_current_user)) -> dict:
     """Manually trigger the pipeline for a session. Resets status to accumulating first."""
     try:
         client = get_client()
@@ -700,7 +706,8 @@ async def trigger_pipeline(session_id: str, user: BackofficeUser = Depends(get_c
 
 
 @router.post("/test-extraction")
-async def test_extraction(body: TestExtractionRequest, user: BackofficeUser = Depends(require_permission("can_edit_prompts"))) -> dict:
+@limiter.limit("10/minute")
+async def test_extraction(request: Request, body: TestExtractionRequest, user: BackofficeUser = Depends(require_permission("can_edit_prompts"))) -> dict:
     """Test an extraction schema against sample text. Returns structured JSON."""
     try:
         from src.engine.schema_builder import build_system_prompt
@@ -744,7 +751,8 @@ class GenerateReportRequest(BaseModel):
 
 
 @router.post("/generate-report")
-async def generate_report_endpoint(body: GenerateReportRequest, user: BackofficeUser = Depends(require_permission("can_generate_reports"))) -> dict:
+@limiter.limit("20/minute")
+async def generate_report_endpoint(request: Request, body: GenerateReportRequest, user: BackofficeUser = Depends(require_permission("can_generate_reports"))) -> dict:
     """Generate one or all report types for a session.
 
     Uses pre-processed transcriptions and image descriptions from raw_files.
@@ -917,7 +925,8 @@ class ConsolidateRequest(BaseModel):
 
 
 @router.post("/consolidate-analysis")
-async def consolidate_analysis(body: ConsolidateRequest, user: BackofficeUser = Depends(require_permission("can_generate_reports"))) -> dict:
+@limiter.limit("5/minute")
+async def consolidate_analysis(request: Request, body: ConsolidateRequest, user: BackofficeUser = Depends(require_permission("can_generate_reports"))) -> dict:
     """Consolidate multiple per-visit analyses into a unified strategic report.
 
     If report_ids is provided, consolidates those specific reports.
@@ -1113,7 +1122,8 @@ class GroupReportRequest(BaseModel):
 
 
 @router.post("/generate-group-report")
-async def generate_group_report_endpoint(body: GroupReportRequest, user: BackofficeUser = Depends(require_permission("can_generate_reports"))) -> dict:
+@limiter.limit("10/minute")
+async def generate_group_report_endpoint(request: Request, body: GroupReportRequest, user: BackofficeUser = Depends(require_permission("can_generate_reports"))) -> dict:
     """Generate a report aggregating all sessions from a user group."""
     try:
         client = get_client()
@@ -1262,7 +1272,8 @@ class ProjectReportRequest(BaseModel):
 
 
 @router.post("/generate-project-report")
-async def generate_project_report_endpoint(body: ProjectReportRequest, user: BackofficeUser = Depends(require_permission("can_generate_reports"))) -> dict:
+@limiter.limit("5/minute")
+async def generate_project_report_endpoint(request: Request, body: ProjectReportRequest, user: BackofficeUser = Depends(require_permission("can_generate_reports"))) -> dict:
     """Generate a project-wide report aggregating all sessions."""
     try:
         client = get_client()
