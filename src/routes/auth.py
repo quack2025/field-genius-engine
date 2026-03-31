@@ -160,7 +160,7 @@ async def get_current_user(request: Request) -> BackofficeUser:
         raise HTTPException(status_code=401, detail="Authentication failed")
 
 
-async def require_permission(perm: str):
+def require_permission(perm: str):
     """Factory for permission-checking dependencies.
 
     Usage:
@@ -174,6 +174,15 @@ async def require_permission(perm: str):
                 status_code=403,
                 detail=f"Permission denied: {perm} required (your role: {user.role})",
             )
+        return user
+    return checker
+
+
+def require_superadmin():
+    """Dependency that requires superadmin role."""
+    async def checker(user: BackofficeUser = Depends(get_current_user)) -> BackofficeUser:
+        if not user.is_superadmin:
+            raise HTTPException(status_code=403, detail="Superadmin required")
         return user
     return checker
 

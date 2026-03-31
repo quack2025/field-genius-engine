@@ -45,8 +45,15 @@ app.add_middleware(
 )
 
 app.include_router(webhook_router)
-app.include_router(simulate_router)
 app.include_router(admin_router)
+
+# Simulate router only in development (not production)
+import os
+if os.environ.get("ENVIRONMENT", "production").lower() in ("development", "dev", "local"):
+    app.include_router(simulate_router)
+else:
+    import structlog
+    structlog.get_logger().info("simulate_router_disabled_in_production")
 
 
 @app.on_event("startup")
@@ -79,20 +86,15 @@ async def health() -> dict:
     }
 
 
-@app.get("/api/test-db")
-async def test_db() -> JSONResponse:
-    """Query Supabase and return the first user from seed data."""
-    try:
-        from src.engine.supabase_client import list_users
-
-        users = await list_users(limit=1)
-        if not users:
-            return JSONResponse(
-                content={"success": True, "data": None, "error": "No users found — run seed.sql first"},
-            )
-        return JSONResponse(content={"success": True, "data": users[0], "error": None})
-    except Exception as e:
-        return JSONResponse(
-            status_code=500,
-            content={"success": False, "data": None, "error": str(e)},
-        )
+if os.environ.get("ENVIRONMENT", "production").lower() in ("development", "dev", "local"):
+    @app.get("/api/test-db")
+    async def test_db() -> JSONResponse:
+        """Query Supabase and return the first user from seed data. Dev only."""
+        try:
+            from src.engine.supabase_client import list_users
+            users = await list_users(limit=1)
+            if not users:
+                return JSONResponse(content={"success": True, "data": None, "error": "No users found"})
+            return JSONResponse(content={"success": True, "data": users[0], "error": None})
+        except Exception as e:
+            return JSONResponse(status_code=500, content={"success": False, "data": None, "error": "DB check failed"})

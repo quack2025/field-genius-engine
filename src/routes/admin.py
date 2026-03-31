@@ -5,12 +5,16 @@ from __future__ import annotations
 import datetime
 from typing import Any
 
+import ipaddress
+from urllib.parse import urlparse
+
 import structlog
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from src.config.settings import settings
 from src.engine.supabase_client import get_client, get_user_by_phone
+from src.routes.auth import BackofficeUser, get_current_user, require_permission, require_superadmin
 
 logger = structlog.get_logger(__name__)
 
@@ -93,14 +97,17 @@ class TestExtractionRequest(BaseModel):
 
 
 @router.get("/implementations")
-async def list_implementations() -> dict:
+async def list_implementations(user: BackofficeUser = Depends(get_current_user)) -> dict:
     client = get_client()
-    result = client.table("implementations").select("*").order("name").execute()
+    query = client.table("implementations").select("*").order("name")
+    if not user.is_superadmin:
+        query = query.in_("id", user.allowed_implementations)
+    result = query.execute()
     return {"success": True, "data": result.data or [], "error": None}
 
 
 @router.post("/implementations")
-async def create_implementation(body: ImplementationCreate) -> dict:
+async def create_implementation(body: ImplementationCreate, user: BackofficeUser = Depends(require_permission("can_edit_frameworks"))) -> dict:
     client = get_client()
     row = body.model_dump()
     row["created_at"] = datetime.datetime.now(datetime.UTC).isoformat()
@@ -115,7 +122,9 @@ async def create_implementation(body: ImplementationCreate) -> dict:
 
 
 @router.get("/implementations/{impl_id}")
-async def get_implementation(impl_id: str) -> dict:
+async def get_implementation(impl_id: str, user: BackofficeUser = Depends(get_current_user)) -> dict:
+    if not user.has_impl_access(impl_id):
+        raise HTTPException(status_code=403, detail="Access denied")
     client = get_client()
     result = (
         client.table("implementations")
@@ -130,7 +139,9 @@ async def get_implementation(impl_id: str) -> dict:
 
 
 @router.put("/implementations/{impl_id}")
-async def update_implementation(impl_id: str, body: ImplementationUpdate) -> dict:
+async def update_implementation(impl_id: str, body: ImplementationUpdate, user: BackofficeUser = Depends(require_permission("can_edit_frameworks"))) -> dict:
+    if not user.has_impl_access(impl_id):
+        raise HTTPException(status_code=403, detail="Access denied")
     client = get_client()
     updates = {k: v for k, v in body.model_dump().items() if v is not None}
     if not updates:
@@ -156,7 +167,7 @@ async def update_implementation(impl_id: str, body: ImplementationUpdate) -> dic
 
 
 @router.delete("/implementations/{impl_id}")
-async def delete_implementation(impl_id: str) -> dict:
+async def delete_implementation(impl_id: str, user: BackofficeUser = Depends(require_superadmin())) -> dict:
     client = get_client()
     # Soft delete — set status to 'inactive'
     result = (
@@ -175,7 +186,9 @@ async def delete_implementation(impl_id: str) -> dict:
 
 
 @router.get("/implementations/{impl_id}/visit-types")
-async def list_visit_types(impl_id: str) -> dict:
+async def list_visit_types(impl_id: str, user: BackofficeUser = Depends(get_current_user)) -> dict:
+    if not user.has_impl_access(impl_id):
+        raise HTTPException(status_code=403, detail="Access denied")
     client = get_client()
     result = (
         client.table("visit_types")
@@ -188,7 +201,9 @@ async def list_visit_types(impl_id: str) -> dict:
 
 
 @router.post("/implementations/{impl_id}/visit-types")
-async def create_visit_type(impl_id: str, body: VisitTypeCreate) -> dict:
+async def create_visit_type(impl_id: str, body: VisitTypeCreate, user: BackofficeUser = Depends(require_permission("can_edit_frameworks"))) -> dict:
+    if not user.has_impl_access(impl_id):
+        raise HTTPException(status_code=403, detail="Access denied")
     client = get_client()
     row = body.model_dump()
     row["implementation_id"] = impl_id
@@ -202,8 +217,15 @@ async def create_visit_type(impl_id: str, body: VisitTypeCreate) -> dict:
 
 
 @router.put("/visit-types/{vt_id}")
-async def update_visit_type(vt_id: str, body: VisitTypeUpdate) -> dict:
+async def update_visit_type(vt_id: str, body: VisitTypeUpdate, user: BackofficeUser = Depends(require_permission("can_edit_frameworks"))) -> dict:
     client = get_client()
+    # Load visit type to check impl access
+    existing = client.table("visit_types").select("implementation_id").eq("id", vt_id).maybe_single().execute()
+    if not existing or not existing.data:
+        raise HTTPException(status_code=404, detail=f"Visit type '{vt_id}' not found")
+    if not user.has_impl_access(existing.data["implementation_id"]):
+        raise HTTPException(status_code=403, detail="Access denied")
+
     updates = {k: v for k, v in body.model_dump().items() if v is not None}
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")
@@ -226,8 +248,15 @@ async def update_visit_type(vt_id: str, body: VisitTypeUpdate) -> dict:
 
 
 @router.delete("/visit-types/{vt_id}")
-async def delete_visit_type(vt_id: str) -> dict:
+async def delete_visit_type(vt_id: str, user: BackofficeUser = Depends(require_permission("can_edit_frameworks"))) -> dict:
     client = get_client()
+    # Load visit type to check impl access
+    existing = client.table("visit_types").select("implementation_id").eq("id", vt_id).maybe_single().execute()
+    if not existing or not existing.data:
+        raise HTTPException(status_code=404, detail=f"Visit type '{vt_id}' not found")
+    if not user.has_impl_access(existing.data["implementation_id"]):
+        raise HTTPException(status_code=403, detail="Access denied")
+
     result = (
         client.table("visit_types")
         .update({"is_active": False})
@@ -244,7 +273,9 @@ async def delete_visit_type(vt_id: str) -> dict:
 
 
 @router.get("/implementations/{impl_id}/users")
-async def list_users(impl_id: str) -> dict:
+async def list_users(impl_id: str, user: BackofficeUser = Depends(get_current_user)) -> dict:
+    if not user.has_impl_access(impl_id):
+        raise HTTPException(status_code=403, detail="Access denied")
     client = get_client()
     result = (
         client.table("users")
@@ -257,7 +288,9 @@ async def list_users(impl_id: str) -> dict:
 
 
 @router.post("/implementations/{impl_id}/users")
-async def assign_user(impl_id: str, body: UserAssign) -> dict:
+async def assign_user(impl_id: str, body: UserAssign, user: BackofficeUser = Depends(require_permission("can_manage_users"))) -> dict:
+    if not user.has_impl_access(impl_id):
+        raise HTTPException(status_code=403, detail="Access denied")
     client = get_client()
     row = {
         "phone": body.phone,
@@ -281,8 +314,10 @@ class SwitchUserImplRequest(BaseModel):
 
 
 @router.post("/users/switch-implementation")
-async def switch_user_implementation(body: SwitchUserImplRequest) -> dict:
+async def switch_user_implementation(body: SwitchUserImplRequest, user: BackofficeUser = Depends(require_permission("can_manage_users"))) -> dict:
     """Change the active implementation for a user (from backoffice)."""
+    if not user.has_impl_access(body.new_implementation):
+        raise HTTPException(status_code=403, detail="Access denied")
     client = get_client()
 
     # Verify implementation exists
@@ -312,7 +347,9 @@ async def switch_user_implementation(body: SwitchUserImplRequest) -> dict:
 
 
 @router.delete("/implementations/{impl_id}/users/{phone}")
-async def remove_user(impl_id: str, phone: str) -> dict:
+async def remove_user(impl_id: str, phone: str, user: BackofficeUser = Depends(require_permission("can_manage_users"))) -> dict:
+    if not user.has_impl_access(impl_id):
+        raise HTTPException(status_code=403, detail="Access denied")
     client = get_client()
     result = (
         client.table("users")
@@ -331,7 +368,7 @@ async def remove_user(impl_id: str, phone: str) -> dict:
 
 
 @router.get("/stats")
-async def get_stats(impl: str | None = None, days: int = 7) -> dict:
+async def get_stats(impl: str | None = None, days: int = 7, user: BackofficeUser = Depends(get_current_user)) -> dict:
     client = get_client()
     cutoff = (datetime.date.today() - datetime.timedelta(days=days)).isoformat()
 
@@ -339,6 +376,8 @@ async def get_stats(impl: str | None = None, days: int = 7) -> dict:
     query = client.table("sessions").select("id, status, date, implementation").gte("date", cutoff)
     if impl:
         query = query.eq("implementation", impl)
+    elif not user.is_superadmin:
+        query = query.in_("implementation", user.allowed_implementations)
     sessions_result = query.execute()
     sessions = sessions_result.data or []
 
@@ -346,6 +385,8 @@ async def get_stats(impl: str | None = None, days: int = 7) -> dict:
     vr_query = client.table("visit_reports").select("id, implementation, confidence_score, status").gte("created_at", cutoff + "T00:00:00")
     if impl:
         vr_query = vr_query.eq("implementation", impl)
+    elif not user.is_superadmin:
+        vr_query = vr_query.in_("implementation", user.allowed_implementations)
     reports_result = vr_query.execute()
     reports = reports_result.data or []
 
@@ -395,6 +436,7 @@ async def list_sessions(
     date_to: str | None = None,
     limit: int = 50,
     offset: int = 0,
+    user: BackofficeUser = Depends(get_current_user),
 ) -> dict:
     """List sessions with optional filters."""
     client = get_client()
@@ -402,6 +444,8 @@ async def list_sessions(
 
     if impl:
         query = query.eq("implementation", impl)
+    elif not user.is_superadmin:
+        query = query.in_("implementation", user.allowed_implementations)
     if phone:
         query = query.eq("user_phone", phone)
     if status:
@@ -417,7 +461,7 @@ async def list_sessions(
 
 
 @router.get("/sessions/{session_id}")
-async def get_session_detail(session_id: str) -> dict:
+async def get_session_detail(session_id: str, user: BackofficeUser = Depends(get_current_user)) -> dict:
     """Get full session detail including media URLs and visit reports."""
     client = get_client()
 
@@ -469,7 +513,7 @@ async def get_session_detail(session_id: str) -> dict:
 
 
 @router.post("/reload-config")
-async def reload_config(impl_id: str | None = None) -> dict:
+async def reload_config(impl_id: str | None = None, user: BackofficeUser = Depends(get_current_user)) -> dict:
     from src.engine.config_loader import reload
     await reload(impl_id)
     return {
@@ -483,13 +527,26 @@ async def reload_config(impl_id: str | None = None) -> dict:
 
 
 @router.post("/test-vision-prompt")
-async def test_vision_prompt(body: TestVisionRequest) -> dict:
+async def test_vision_prompt(body: TestVisionRequest, user: BackofficeUser = Depends(require_permission("can_edit_prompts"))) -> dict:
     """Test a vision prompt against an image URL. Returns the AI description."""
     try:
         import anthropic
         from src.config.settings import settings
 
         client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+
+        # SSRF protection: only allow HTTPS from public hosts
+        parsed_url = urlparse(body.image_url)
+        if parsed_url.scheme != "https":
+            raise HTTPException(status_code=400, detail="Only HTTPS URLs allowed")
+        if parsed_url.hostname in ("localhost", "127.0.0.1", "0.0.0.0", "metadata.google.internal"):
+            raise HTTPException(status_code=400, detail="Internal URLs not allowed")
+        try:
+            ip = ipaddress.ip_address(parsed_url.hostname or "")
+            if ip.is_private or ip.is_loopback or ip.is_link_local:
+                raise HTTPException(status_code=400, detail="Private/internal URLs not allowed")
+        except ValueError:
+            pass  # hostname is a domain name, not IP — that's fine
 
         # Fetch image bytes
         import httpx
@@ -535,7 +592,7 @@ class BulkImportRequest(BaseModel):
 
 
 @router.post("/bulk-import-users")
-async def bulk_import_users(body: BulkImportRequest) -> dict:
+async def bulk_import_users(body: BulkImportRequest, user: BackofficeUser = Depends(require_permission("can_bulk_import"))) -> dict:
     """Bulk import users from a list (CSV-parsed on frontend).
 
     Each user dict: { phone, name, role?, country?, group_slug? }
@@ -607,7 +664,7 @@ async def bulk_import_users(body: BulkImportRequest) -> dict:
 
 
 @router.post("/trigger-pipeline/{session_id}")
-async def trigger_pipeline(session_id: str) -> dict:
+async def trigger_pipeline(session_id: str, user: BackofficeUser = Depends(get_current_user)) -> dict:
     """Manually trigger the pipeline for a session. Resets status to accumulating first."""
     try:
         client = get_client()
@@ -643,7 +700,7 @@ async def trigger_pipeline(session_id: str) -> dict:
 
 
 @router.post("/test-extraction")
-async def test_extraction(body: TestExtractionRequest) -> dict:
+async def test_extraction(body: TestExtractionRequest, user: BackofficeUser = Depends(require_permission("can_edit_prompts"))) -> dict:
     """Test an extraction schema against sample text. Returns structured JSON."""
     try:
         from src.engine.schema_builder import build_system_prompt
@@ -687,7 +744,7 @@ class GenerateReportRequest(BaseModel):
 
 
 @router.post("/generate-report")
-async def generate_report_endpoint(body: GenerateReportRequest) -> dict:
+async def generate_report_endpoint(body: GenerateReportRequest, user: BackofficeUser = Depends(require_permission("can_generate_reports"))) -> dict:
     """Generate one or all report types for a session.
 
     Uses pre-processed transcriptions and image descriptions from raw_files.
@@ -860,7 +917,7 @@ class ConsolidateRequest(BaseModel):
 
 
 @router.post("/consolidate-analysis")
-async def consolidate_analysis(body: ConsolidateRequest) -> dict:
+async def consolidate_analysis(body: ConsolidateRequest, user: BackofficeUser = Depends(require_permission("can_generate_reports"))) -> dict:
     """Consolidate multiple per-visit analyses into a unified strategic report.
 
     If report_ids is provided, consolidates those specific reports.
@@ -987,7 +1044,7 @@ class UserGroupCreate(BaseModel):
 
 
 @router.get("/user-groups")
-async def list_user_groups(impl: str | None = None) -> dict:
+async def list_user_groups(impl: str | None = None, user: BackofficeUser = Depends(get_current_user)) -> dict:
     client = get_client()
     query = client.table("user_groups").select("*").order("name")
     if impl:
@@ -997,7 +1054,7 @@ async def list_user_groups(impl: str | None = None) -> dict:
 
 
 @router.post("/implementations/{impl_id}/user-groups")
-async def create_user_group(impl_id: str, body: UserGroupCreate) -> dict:
+async def create_user_group(impl_id: str, body: UserGroupCreate, user: BackofficeUser = Depends(require_permission("can_manage_groups"))) -> dict:
     client = get_client()
     result = client.table("user_groups").insert({
         "implementation_id": impl_id,
@@ -1010,7 +1067,7 @@ async def create_user_group(impl_id: str, body: UserGroupCreate) -> dict:
 
 
 @router.put("/user-groups/{group_id}")
-async def update_user_group(group_id: str, body: UserGroupCreate) -> dict:
+async def update_user_group(group_id: str, body: UserGroupCreate, user: BackofficeUser = Depends(require_permission("can_manage_groups"))) -> dict:
     client = get_client()
     result = client.table("user_groups").update({
         "name": body.name,
@@ -1028,7 +1085,7 @@ class GroupMemberRequest(BaseModel):
 
 
 @router.post("/user-groups/{group_id}/members")
-async def add_group_member(group_id: str, body: GroupMemberRequest) -> dict:
+async def add_group_member(group_id: str, body: GroupMemberRequest, user: BackofficeUser = Depends(require_permission("can_manage_groups"))) -> dict:
     client = get_client()
     result = client.table("users").update({
         "group_id": group_id,
@@ -1039,7 +1096,7 @@ async def add_group_member(group_id: str, body: GroupMemberRequest) -> dict:
 
 
 @router.delete("/user-groups/{group_id}/members/{phone}")
-async def remove_group_member(group_id: str, phone: str) -> dict:
+async def remove_group_member(group_id: str, phone: str, user: BackofficeUser = Depends(require_permission("can_manage_groups"))) -> dict:
     client = get_client()
     client.table("users").update({"group_id": None}).eq("phone", phone).eq("group_id", group_id).execute()
     return {"success": True, "data": {"removed": True}, "error": None}
@@ -1056,7 +1113,7 @@ class GroupReportRequest(BaseModel):
 
 
 @router.post("/generate-group-report")
-async def generate_group_report_endpoint(body: GroupReportRequest) -> dict:
+async def generate_group_report_endpoint(body: GroupReportRequest, user: BackofficeUser = Depends(require_permission("can_generate_reports"))) -> dict:
     """Generate a report aggregating all sessions from a user group."""
     try:
         client = get_client()
@@ -1205,7 +1262,7 @@ class ProjectReportRequest(BaseModel):
 
 
 @router.post("/generate-project-report")
-async def generate_project_report_endpoint(body: ProjectReportRequest) -> dict:
+async def generate_project_report_endpoint(body: ProjectReportRequest, user: BackofficeUser = Depends(require_permission("can_generate_reports"))) -> dict:
     """Generate a project-wide report aggregating all sessions."""
     try:
         client = get_client()
@@ -1334,7 +1391,7 @@ class BackofficeUserCreate(BaseModel):
 
 
 @router.get("/backoffice-users")
-async def list_backoffice_users_endpoint() -> dict:
+async def list_backoffice_users_endpoint(user: BackofficeUser = Depends(require_superadmin())) -> dict:
     """List all backoffice users. Superadmin only."""
     from src.routes.auth import list_backoffice_users
     users = await list_backoffice_users()
@@ -1342,7 +1399,7 @@ async def list_backoffice_users_endpoint() -> dict:
 
 
 @router.post("/backoffice-users")
-async def create_backoffice_user_endpoint(body: BackofficeUserCreate) -> dict:
+async def create_backoffice_user_endpoint(body: BackofficeUserCreate, user: BackofficeUser = Depends(require_superadmin())) -> dict:
     """Create or update a backoffice user. Creates auth.users record if needed."""
     try:
         from src.routes.auth import create_backoffice_user
@@ -1360,7 +1417,7 @@ async def create_backoffice_user_endpoint(body: BackofficeUserCreate) -> dict:
 
 
 @router.put("/backoffice-users/{user_id}")
-async def update_backoffice_user_endpoint(user_id: str, body: dict[str, Any]) -> dict:
+async def update_backoffice_user_endpoint(user_id: str, body: dict[str, Any], user: BackofficeUser = Depends(require_superadmin())) -> dict:
     """Update a backoffice user's role, permissions, or allowed implementations."""
     client = get_client()
     allowed_fields = {"role", "name", "allowed_implementations", "permissions", "is_active"}
@@ -1396,26 +1453,17 @@ async def get_my_profile(request: Request) -> dict:
             },
             "error": None,
         }
-    except Exception:
-        # If auth fails, return unauthenticated profile (backwards compat during transition)
-        from src.routes.auth import ROLE_PERMISSIONS
-        return {
-            "success": True,
-            "data": {
-                "role": "superadmin",
-                "is_superadmin": True,
-                "allowed_implementations": [],
-                "permissions": ROLE_PERMISSIONS.get("superadmin", {}),
-            },
-            "error": None,
-        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=401, detail="Authentication required")
 
 
 # ── Retention & Usage ──────────────────────────────────────────────
 
 
 @router.post("/run-retention")
-async def run_retention_endpoint(
+async def run_retention_endpoint(user: BackofficeUser = Depends(require_superadmin()),
     retention_days: int = 90,
     dry_run: bool = True,
 ) -> dict:
@@ -1426,7 +1474,7 @@ async def run_retention_endpoint(
 
 
 @router.get("/usage")
-async def get_usage(impl: str | None = None) -> dict:
+async def get_usage(impl: str | None = None, user: BackofficeUser = Depends(get_current_user)) -> dict:
     """Get usage stats for billing/monitoring. Computed live from DB."""
     client = get_client()
 
