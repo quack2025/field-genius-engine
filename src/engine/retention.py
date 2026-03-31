@@ -41,14 +41,23 @@ async def run_retention(
 
     logger.info("retention_start", cutoff=cutoff_str, dry_run=dry_run)
 
-    # Find sessions older than cutoff that still have storage_path entries
-    result = (
-        client.table("sessions")
-        .select("id, raw_files, date, user_phone")
-        .lt("created_at", cutoff_str)
-        .execute()
-    )
-    sessions = result.data or []
+    # Find sessions older than cutoff in batches (avoid OOM on large datasets)
+    BATCH_SIZE = 200
+    sessions: list[dict[str, Any]] = []
+    offset = 0
+    while True:
+        batch = (
+            client.table("sessions")
+            .select("id, raw_files, date, user_phone")
+            .lt("created_at", cutoff_str)
+            .range(offset, offset + BATCH_SIZE - 1)
+            .execute()
+        )
+        rows = batch.data or []
+        sessions.extend(rows)
+        if len(rows) < BATCH_SIZE:
+            break
+        offset += BATCH_SIZE
 
     total_files = 0
     total_deleted = 0

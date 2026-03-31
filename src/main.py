@@ -1,8 +1,11 @@
 """Field Genius Engine — FastAPI entry point."""
 
+import uuid
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
@@ -39,6 +42,21 @@ app = FastAPI(
 )
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+
+class RequestIdMiddleware(BaseHTTPMiddleware):
+    """Add X-Request-Id to every response + bind to structlog for correlation."""
+    async def dispatch(self, request: Request, call_next):
+        request_id = request.headers.get("X-Request-Id", str(uuid.uuid4())[:8])
+        import structlog
+        structlog.contextvars.clear_contextvars()
+        structlog.contextvars.bind_contextvars(request_id=request_id)
+        response = await call_next(request)
+        response.headers["X-Request-Id"] = request_id
+        return response
+
+
+app.add_middleware(RequestIdMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -78,6 +96,19 @@ async def startup() -> None:
         except Exception as e:
             import structlog
             structlog.get_logger().warning("redis_startup_failed_continuing_without", error=str(e))
+
+
+@app.on_event("shutdown")
+async def shutdown() -> None:
+    """Graceful shutdown: close Redis pool."""
+    try:
+        from src.engine.worker import _pool
+        if _pool:
+            await _pool.close()
+            import structlog
+            structlog.get_logger().info("redis_pool_closed")
+    except Exception:
+        pass
 
 
 @app.get("/health")
