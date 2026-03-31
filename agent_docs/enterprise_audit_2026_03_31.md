@@ -25,14 +25,18 @@
 
 ## Hardening Sprints
 
-### Sprint E-1: SEGURIDAD (P0, 1-2 dias)
-- [ ] Wire `Depends(get_current_user)` en todos los admin endpoints
-- [ ] Remover /test-db y /simulate de produccion (gate con env var)
-- [ ] Fix /my-profile: eliminar fallback a superadmin en auth failure
-- [ ] Add slowapi rate limiting (10 req/min AI endpoints, 60 req/min reads)
+### Sprint E-1: SEGURIDAD (P0) — COMPLETADO 2026-03-31
+- [x] Wire `Depends(get_current_user)` en todos los 30+ admin endpoints
+- [x] Tenant filtering en queries de lista (sessions, implementations, stats, groups)
+- [x] Permission checks: can_edit_frameworks, can_manage_users, can_generate_reports, etc.
+- [x] Remover /test-db y /simulate de produccion (gated con ENVIRONMENT env var)
+- [x] Fix /my-profile: eliminado fallback a superadmin en auth failure
+- [x] Add slowapi rate limiting (5-20/min AI endpoints, 120/min global)
+- [x] Fix SSRF en test-vision-prompt (HTTPS only, block private IPs)
+- [x] Fix require_permission factory (removed async)
+- [x] Singleton AsyncAnthropic client (eliminado connection leak)
+- [x] Frontend envia JWT en todas las requests (api.ts getAuthHeaders)
 - [ ] Rotar secrets: .env local NO apunta a produccion
-- [ ] Fix SSRF en test-vision-prompt (URL allowlist)
-- [ ] Fix require_permission factory (remove async)
 - [ ] Validate phone E.164, role enum, session_id UUID
 
 ### Sprint E-2: PERFORMANCE (P1, 1-2 dias)
