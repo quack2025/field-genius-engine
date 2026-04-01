@@ -72,18 +72,22 @@
 - [ ] Migrate RLS policies to use implementation_id consistently
 - [ ] NOT NULL constraint en implementation_id
 
-### Sprint E-5: OBSERVABILITY (P2, 1 dia)
-- [ ] Health check con dependency status (Supabase, Anthropic, OpenAI, Twilio)
-- [ ] Correlation IDs propagated through pipeline (trace_id)
-- [ ] Dead letter queue + alerting on failed jobs
+### Sprint E-5: OBSERVABILITY (P2) — COMPLETADO 2026-04-01
+- [x] Deep health check: GET /health/deep (Supabase, Anthropic, OpenAI, Redis, Twilio)
+- [x] JSON structured logging in production (ConsoleRenderer in dev only)
+- [x] Correlation IDs via X-Request-Id middleware (done in E-2)
+- [x] Dead letter tracking: failed jobs logged to DB after max retries
 - [ ] Backpressure signal to WhatsApp users (estimated wait time)
 - [ ] Usage metering middleware (per-tenant API call tracking)
 
-### Sprint E-6: HARDENING (P2, 1 dia)
-- [ ] Pin dependency versions (pip-compile lockfile)
-- [ ] Remove weasyprint if PDF not in use
-- [ ] Hardcode webhook public URL (don't trust X-Forwarded-* headers)
-- [ ] Move CORS origins to env vars
+### Sprint E-6: HARDENING (P2) — COMPLETADO 2026-04-01
+- [x] Dependencies pinned to exact versions (== instead of >=)
+- [x] weasyprint moved to optional [pdf] extra (saves 200MB Docker)
+- [x] Webhook URL from WEBHOOK_PUBLIC_URL setting (no X-Forwarded trust)
+- [x] CORS origins from CORS_ORIGINS env var (was hardcoded)
+- [x] CORS methods/headers restricted (was wildcard)
+- [x] ENVIRONMENT setting (replaces scattered os.environ checks)
+- [x] Version bumped to 1.0.0
 - [ ] Integration tests with test Supabase project
 - [ ] Webhook event system for customers (future upsell)
 
