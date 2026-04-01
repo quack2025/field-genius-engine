@@ -36,12 +36,41 @@ if _missing:
     sys.exit(1)
 
 app = FastAPI(
-    title="Field Genius Engine",
-    version="0.2.0",
-    description="Multimodal capture → AI → structured reports",
+    title="Field Genius Engine API",
+    version="1.0.0",
+    description="""Field Intelligence Platform — captures field photos, audio, and video via WhatsApp,
+processes them with AI (Claude Vision + Whisper), and generates strategic reports.
+
+## Authentication
+All `/api/admin/*` endpoints require a Supabase JWT token in the `Authorization: Bearer <token>` header.
+Obtain a token by signing in via the backoffice at `field-genius-backoffice.vercel.app`.
+
+## Rate Limits
+- Global: 120 requests/minute per IP
+- AI-invoking endpoints: 5-20 requests/minute (see endpoint descriptions)
+- Rate limit headers: `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`
+
+## Versioning
+Routes are available at both `/api/admin/*` (current) and `/v1/api/admin/*` (versioned).
+New integrations should use the `/v1/` prefix.
+""",
+    openapi_tags=[
+        {"name": "admin", "description": "Backoffice administration — implementations, users, sessions, reports"},
+        {"name": "webhook", "description": "WhatsApp webhook for Twilio"},
+    ],
+    docs_url="/docs",
+    redoc_url="/redoc",
 )
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# Standardized error responses
+from fastapi.exceptions import RequestValidationError
+from starlette.exceptions import HTTPException as StarletteHTTPException
+from src.routes.errors import http_exception_handler, validation_exception_handler, generic_exception_handler
+app.add_exception_handler(StarletteHTTPException, http_exception_handler)
+app.add_exception_handler(RequestValidationError, validation_exception_handler)
+app.add_exception_handler(Exception, generic_exception_handler)
 
 
 class RequestIdMiddleware(BaseHTTPMiddleware):
@@ -72,7 +101,12 @@ app.add_middleware(
 )
 
 app.include_router(webhook_router)
-app.include_router(admin_router)
+
+# V1 API — versioned routes
+app.include_router(admin_router, prefix="/v1")  # /v1/api/admin/*
+
+# Backwards compat — also mount at root (will deprecate)
+app.include_router(admin_router)  # /api/admin/*
 
 # Simulate router only in development (not production)
 import os

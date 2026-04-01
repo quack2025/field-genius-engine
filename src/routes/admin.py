@@ -459,9 +459,38 @@ async def list_sessions(
     if date_to:
         query = query.lte("date", date_to)
 
+    # Get total count for pagination
+    count_query = client.table("sessions").select("id", count="exact")
+    if impl:
+        count_query = count_query.eq("implementation", impl)
+    elif not user.is_superadmin:
+        count_query = count_query.in_("implementation", user.allowed_implementations)
+    if phone:
+        count_query = count_query.eq("user_phone", phone)
+    if status:
+        count_query = count_query.eq("status", status)
+    if date_from:
+        count_query = count_query.gte("date", date_from)
+    if date_to:
+        count_query = count_query.lte("date", date_to)
+    count_result = count_query.execute()
+    total = count_result.count or 0
+
     query = query.range(offset, offset + limit - 1)
     result = query.execute()
-    return {"success": True, "data": result.data or [], "error": None}
+    data = result.data or []
+
+    return {
+        "success": True,
+        "data": data,
+        "pagination": {
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "has_more": offset + limit < total,
+        },
+        "error": None,
+    }
 
 
 @router.get("/sessions/{session_id}")
