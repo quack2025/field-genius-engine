@@ -39,24 +39,25 @@
 - [ ] Rotar secrets: .env local NO apunta a produccion
 - [ ] Validate phone E.164, role enum, session_id UUID
 
-### Sprint E-2: PERFORMANCE (P1, 1-2 dias)
-- [ ] Supabase async client (create_async_client o asyncio.to_thread wraps)
-- [ ] Atomic raw_files append (jsonb || operator en single UPDATE)
-- [ ] Singleton AsyncAnthropic client (module-level, reused)
-- [ ] Retention pagination (.range() en batches de 500)
-- [ ] Request ID middleware (X-Request-Id header + structlog bind)
-- [ ] JSON structured logging en produccion (no ConsoleRenderer)
-- [ ] Graceful shutdown handler (drain queue, close connections)
+### Sprint E-2: PERFORMANCE (P1) — COMPLETADO 2026-04-01
+- [x] Supabase async wrapping (asyncio.to_thread on ALL sync DB calls)
+- [x] Atomic raw_files append (PostgreSQL RPC: jsonb || operator, SQL 012)
+- [x] Singleton AsyncAnthropic client (module-level in analyzer.py)
+- [x] Retention pagination (batches of 200, was unbounded)
+- [x] Request ID middleware (X-Request-Id header + structlog contextvars)
+- [x] Graceful shutdown handler (close Redis pool on SIGTERM)
+- [ ] JSON structured logging en produccion (ConsoleRenderer still used)
 - [ ] Fix datetime.date.today() → timezone-aware per user
 
-### Sprint E-3: API PRODUCT (P1, 1-2 dias)
-- [ ] /v1/ prefix en todas las rutas
+### Sprint E-3: API PRODUCT (P1) — COMPLETADO 2026-04-01
+- [x] /v1/ prefix: routes at /v1/api/admin/* (backwards compat at /api/admin/*)
+- [x] Standardized error responses: { error: { code, message, request_id } }
+- [x] Error handlers: HTTPException, ValidationError, unhandled (500s never leak)
+- [x] Pagination metadata on /sessions: { pagination: { total, limit, offset, has_more } }
+- [x] OpenAPI spec enhanced: title, description, auth docs, rate limit docs, tags
+- [x] Available at /docs (Swagger UI) and /redoc (ReDoc)
 - [ ] Custom domain: api.fieldgenius.io
-- [ ] OpenAPI spec curada con ejemplos y descriptions
-- [ ] Pagination metadata en list endpoints (total_count, has_more, cursor)
-- [ ] Standardized error responses: { error: { code, message, request_id } }
-- [ ] Idempotency-Key header en POST endpoints con side effects
-- [ ] Remove success field from responses (use HTTP status codes)
+- [ ] Idempotency-Key header en POST endpoints
 - [ ] Async report generation (return 202 + job_id, poll for result)
 
 ### Sprint E-4: SUPABASE HARDENING (P1, 1 dia)
