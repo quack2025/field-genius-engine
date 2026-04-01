@@ -53,8 +53,9 @@ async def preprocess_file(
 
 
 async def _preprocess_audio(session_id: str, filename: str, storage_path: str) -> None:
-    """Transcribe audio and store result in raw_files entry."""
+    """Transcribe audio and store result in raw_files entry. Scrubs PII."""
     from src.engine.transcriber import transcribe
+    from src.engine.content_safety import scrub_pii
 
     start = time.time()
     logger.info("preprocess_audio_start", filename=filename)
@@ -63,8 +64,13 @@ async def _preprocess_audio(session_id: str, filename: str, storage_path: str) -
     elapsed_ms = int((time.time() - start) * 1000)
 
     if text:
-        await update_file_in_session(session_id, filename, {"transcription": text})
-        logger.info("preprocess_audio_done", filename=filename, chars=len(text), elapsed_ms=elapsed_ms)
+        # Scrub PII before storing
+        scrubbed, pii_count = scrub_pii(text)
+        updates: dict[str, Any] = {"transcription": scrubbed}
+        if pii_count > 0:
+            updates["pii_scrubbed"] = pii_count
+        await update_file_in_session(session_id, filename, updates)
+        logger.info("preprocess_audio_done", filename=filename, chars=len(scrubbed), pii_scrubbed=pii_count, elapsed_ms=elapsed_ms)
     else:
         logger.info("preprocess_audio_empty", filename=filename, elapsed_ms=elapsed_ms)
 
@@ -72,18 +78,52 @@ async def _preprocess_audio(session_id: str, filename: str, storage_path: str) -
 async def _preprocess_image(
     session_id: str, filename: str, storage_path: str, implementation: str
 ) -> None:
-    """Analyze image with Vision and store description in raw_files entry."""
-    from src.engine.vision import analyze_from_storage
+    """Screen image for content safety, then analyze with Vision."""
+    from src.engine.supabase_client import get_client
+    from src.engine.content_safety import classify_image
 
     start = time.time()
     logger.info("preprocess_image_start", filename=filename)
 
+    # Step 1: Download image for classification
+    try:
+        sb = get_client()
+        image_bytes = sb.storage.from_("media").download(storage_path)
+    except Exception as e:
+        logger.error("preprocess_image_download_failed", filename=filename, error=str(e))
+        return
+
+    # Step 2: Content moderation (Haiku — cheap + fast)
+    classification = await classify_image(image_bytes)
+    category = classification["category"]
+
+    updates: dict[str, Any] = {"content_category": category}
+
+    if not classification["is_safe"]:
+        # NSFW content — flag and do NOT process with Vision
+        updates["image_description"] = f"[CONTENIDO BLOQUEADO: {category}]"
+        updates["blocked"] = True
+        await update_file_in_session(session_id, filename, updates)
+        logger.warning("preprocess_image_blocked", filename=filename, category=category)
+        return
+
+    if not classification["should_process"]:
+        # Personal/confidential — flag but store category, don't run Vision
+        updates["image_description"] = f"[CONTENIDO NO RELEVANTE: {category}]"
+        updates["flagged"] = True
+        await update_file_in_session(session_id, filename, updates)
+        logger.info("preprocess_image_flagged", filename=filename, category=category)
+        return
+
+    # Step 3: Business-relevant — run Vision analysis
+    from src.engine.vision import analyze_from_storage
     desc = await analyze_from_storage(storage_path, implementation=implementation)
     elapsed_ms = int((time.time() - start) * 1000)
 
     if desc and not desc.startswith("[Error"):
-        await update_file_in_session(session_id, filename, {"image_description": desc})
-        logger.info("preprocess_image_done", filename=filename, chars=len(desc), elapsed_ms=elapsed_ms)
+        updates["image_description"] = desc
+        await update_file_in_session(session_id, filename, updates)
+        logger.info("preprocess_image_done", filename=filename, category=category, chars=len(desc), elapsed_ms=elapsed_ms)
     else:
         logger.info("preprocess_image_failed", filename=filename, elapsed_ms=elapsed_ms)
 

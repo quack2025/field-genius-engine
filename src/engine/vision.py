@@ -51,8 +51,9 @@ async def analyze_image(
         if context:
             user_text += f"\nContexto: {context}"
 
+        # Use Haiku for Vision (60% cheaper than Sonnet, sufficient for image description)
         message = client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-haiku-4-5-20251001",
             max_tokens=1024,
             system=vision_prompt,
             messages=[

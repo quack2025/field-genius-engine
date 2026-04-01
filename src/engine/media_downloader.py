@@ -80,6 +80,12 @@ async def download_and_store(
             response.raise_for_status()
             file_bytes = response.content
 
+        # Enforce file size limit (5MB)
+        MAX_FILE_SIZE = 5 * 1024 * 1024  # 5MB
+        if len(file_bytes) > MAX_FILE_SIZE:
+            logger.warning("media_too_large", size=len(file_bytes), max=MAX_FILE_SIZE, storage_path=storage_path)
+            raise ValueError(f"File too large: {len(file_bytes)} bytes (max {MAX_FILE_SIZE})")
+
         # Upload to Supabase Storage
         client = get_client()
         client.storage.from_("media").upload(
