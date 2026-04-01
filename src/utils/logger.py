@@ -1,16 +1,26 @@
-"""Structured JSON logging via structlog."""
+"""Structured logging via structlog — JSON in production, colored in dev."""
 
+import os
 import structlog
 
 
 def setup_logging() -> None:
-    """Configure structlog for JSON output."""
+    """Configure structlog. JSON for production, console for development."""
+    env = os.environ.get("ENVIRONMENT", "production").lower()
+    is_dev = env in ("development", "dev", "local")
+
+    if is_dev:
+        renderer = structlog.dev.ConsoleRenderer()
+    else:
+        renderer = structlog.processors.JSONRenderer()
+
     structlog.configure(
         processors=[
             structlog.contextvars.merge_contextvars,
             structlog.processors.add_log_level,
             structlog.processors.TimeStamper(fmt="iso"),
-            structlog.dev.ConsoleRenderer(),
+            structlog.processors.StackInfoRenderer(),
+            renderer,
         ],
         wrapper_class=structlog.make_filtering_bound_logger(0),
         context_class=dict,

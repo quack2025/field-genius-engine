@@ -145,6 +145,22 @@ async def process_file(
     return f"ok:{filename}:{elapsed_ms}ms"
 
 
+async def _on_job_failure(ctx: dict, error: BaseException) -> None:
+    """Called when a job fails after all retries. Logs to DB for monitoring."""
+    job = ctx.get("job_id", "unknown")
+    logger.error("job_permanently_failed", job_id=job, error=str(error), error_type=type(error).__name__)
+    try:
+        from src.engine.supabase_client import get_client
+        client = get_client()
+        client.table("failed_jobs").insert({
+            "job_id": str(job),
+            "error": str(error)[:500],
+            "error_type": type(error).__name__,
+        }).execute()
+    except Exception:
+        pass  # Best effort — don't crash the worker
+
+
 async def get_queue_stats() -> dict[str, Any]:
     """Get queue statistics for monitoring."""
     pool = await get_pool()

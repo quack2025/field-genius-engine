@@ -88,16 +88,10 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
 app.add_middleware(RequestIdMiddleware)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",
-        "http://localhost:3000",
-        "https://field-genius-backoffice.vercel.app",
-        "https://xponencial.net",
-        "https://www.xponencial.net",
-    ],
+    allow_origins=[o.strip() for o in settings.cors_origins.split(",") if o.strip()],
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-Request-Id"],
 )
 
 app.include_router(webhook_router)
@@ -109,12 +103,9 @@ app.include_router(admin_router, prefix="/v1")  # /v1/api/admin/*
 app.include_router(admin_router)  # /api/admin/*
 
 # Simulate router only in development (not production)
-import os
-if os.environ.get("ENVIRONMENT", "production").lower() in ("development", "dev", "local"):
+_is_dev = settings.environment.lower() in ("development", "dev", "local")
+if _is_dev:
     app.include_router(simulate_router)
-else:
-    import structlog
-    structlog.get_logger().info("simulate_router_disabled_in_production")
 
 
 @app.on_event("startup")
@@ -147,20 +138,60 @@ async def shutdown() -> None:
 
 @app.get("/health")
 async def health() -> dict:
+    """Basic health check — always returns quickly."""
+    return {"status": "ok", "version": "1.0.0"}
+
+
+@app.get("/health/deep")
+async def health_deep() -> dict:
+    """Deep health check — verifies all dependencies."""
+    checks: dict[str, str] = {}
+
+    # Redis
     try:
         from src.engine.worker import get_queue_stats
         queue = await get_queue_stats()
+        checks["redis"] = queue.get("status", "unknown")
     except Exception:
-        queue = {"status": "error"}
+        checks["redis"] = "error"
+
+    # Supabase
+    try:
+        from src.engine.supabase_client import list_users
+        await list_users(limit=1)
+        checks["supabase"] = "ok"
+    except Exception:
+        checks["supabase"] = "error"
+
+    # Anthropic API key
+    try:
+        from anthropic import AsyncAnthropic
+        client = AsyncAnthropic(api_key=settings.anthropic_api_key, timeout=5.0)
+        await client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=5,
+            messages=[{"role": "user", "content": "ping"}],
+        )
+        checks["anthropic"] = "ok"
+    except Exception:
+        checks["anthropic"] = "error"
+
+    # OpenAI (check key format only — no API call to save cost)
+    checks["openai"] = "ok" if settings.openai_api_key.startswith("sk-") else "missing"
+
+    # Twilio
+    checks["twilio"] = "ok" if settings.twilio_auth_token else "missing"
+
+    all_ok = all(v == "ok" for v in checks.values())
+
     return {
-        "status": "ok",
-        "implementation": "field-genius-engine",
-        "version": "0.2.0",
-        "queue": queue,
+        "status": "ok" if all_ok else "degraded",
+        "version": "1.0.0",
+        "checks": checks,
     }
 
 
-if os.environ.get("ENVIRONMENT", "production").lower() in ("development", "dev", "local"):
+if _is_dev:
     @app.get("/api/test-db")
     async def test_db() -> JSONResponse:
         """Query Supabase and return the first user from seed data. Dev only."""

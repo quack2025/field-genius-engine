@@ -32,6 +32,13 @@ class Settings(BaseSettings):
     # Config
     default_implementation: str = "laundry_care"
     default_language: str = "es"
+    environment: str = "production"  # development | production
+
+    # CORS (comma-separated origins)
+    cors_origins: str = "http://localhost:5173,http://localhost:3000,https://field-genius-backoffice.vercel.app,https://xponencial.net,https://www.xponencial.net"
+
+    # Webhook public URL (for Twilio signature verification — don't trust headers)
+    webhook_public_url: str = ""  # e.g. https://zealous-endurance-production-f9b2.up.railway.app
 
     model_config = {
         "env_file": ".env",
