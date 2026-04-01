@@ -1419,6 +1419,481 @@ async def generate_project_report_endpoint(request: Request, body: ProjectReport
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ── Report Persistence & Export ──────────────────────────────────────
+
+
+@router.get("/reports")
+async def list_reports(
+    session_id: str | None = None,
+    implementation_id: str | None = None,
+    framework: str | None = None,
+    limit: int = 50,
+    user: BackofficeUser = Depends(get_current_user),
+) -> dict:
+    """List saved reports from consolidated_reports. Supports filtering."""
+    try:
+        client = get_client()
+        query = (
+            client.table("consolidated_reports")
+            .select("id, implementation_id, title, framework, filters, status, created_at, analysis_markdown")
+            .eq("status", "completed")
+            .order("created_at", desc=True)
+            .limit(limit)
+        )
+        if session_id:
+            query = query.contains("filters", {"session_id": session_id})
+        if implementation_id:
+            query = query.eq("implementation_id", implementation_id)
+        if framework:
+            query = query.eq("framework", framework)
+
+        result = query.execute()
+        return {"success": True, "data": result.data or [], "error": None}
+    except Exception as e:
+        logger.error("list_reports_failed", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/reports/{report_id}")
+async def get_report(report_id: str, user: BackofficeUser = Depends(get_current_user)) -> dict:
+    """Get a single saved report by ID."""
+    client = get_client()
+    result = (
+        client.table("consolidated_reports")
+        .select("*")
+        .eq("id", report_id)
+        .maybe_single()
+        .execute()
+    )
+    if not result.data:
+        raise HTTPException(status_code=404, detail="Report not found")
+    return {"success": True, "data": result.data, "error": None}
+
+
+class ExportGammaRequest(BaseModel):
+    report_id: str | None = None
+    markdown: str | None = None
+    title: str = "Reporte de Campo"
+
+
+@router.post("/export-gamma")
+@limiter.limit("10/minute")
+async def export_gamma(request: Request, body: ExportGammaRequest, user: BackofficeUser = Depends(get_current_user)) -> dict:
+    """Export a report to Gamma presentation.
+
+    Accepts either a report_id (loads from DB) or raw markdown.
+    Returns a structured prompt for Gamma and attempts API creation if key is configured.
+    """
+    try:
+        markdown = body.markdown
+        title = body.title
+
+        if body.report_id and not markdown:
+            client = get_client()
+            result = (
+                client.table("consolidated_reports")
+                .select("analysis_markdown, title, framework, implementation_id")
+                .eq("id", body.report_id)
+                .maybe_single()
+                .execute()
+            )
+            if not result.data:
+                raise HTTPException(status_code=404, detail="Report not found")
+            markdown = result.data["analysis_markdown"]
+            title = result.data.get("title") or title
+
+        if not markdown:
+            raise HTTPException(status_code=400, detail="Either report_id or markdown is required")
+
+        # Build Gamma-optimized content: clean markdown → structured slides
+        gamma_content = _build_gamma_content(markdown, title)
+
+        response_data: dict[str, Any] = {
+            "mode": "prompt",
+            "gamma_content": gamma_content,
+            "title": title,
+            "url": None,
+        }
+
+        # Try Gamma API if key is available
+        if settings.gamma_api_key:
+            try:
+                import httpx
+                async with httpx.AsyncClient(timeout=60) as http_client:
+                    resp = await http_client.post(
+                        "https://gamma.app/api/v1/presentations",
+                        headers={
+                            "Authorization": f"Bearer {settings.gamma_api_key}",
+                            "Content-Type": "application/json",
+                        },
+                        json={"content": gamma_content, "title": title},
+                    )
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        response_data["mode"] = "api"
+                        response_data["url"] = data.get("url", data.get("presentation_url"))
+            except Exception as e:
+                logger.warning("gamma_api_failed", error=str(e))
+
+        return {"success": True, "data": response_data, "error": None}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("export_gamma_failed", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def _build_gamma_content(markdown: str, title: str) -> str:
+    """Convert report markdown into Gamma-optimized slide content."""
+    lines = markdown.strip().split("\n")
+    slides: list[str] = []
+
+    # Title slide
+    slides.append(f"# {title}\n*Generado por Field Genius Engine — Genius Labs AI*\n")
+
+    current_section = ""
+    current_body: list[str] = []
+
+    for line in lines:
+        if line.startswith("# ") and not current_section:
+            # Skip the original H1 (already in title slide)
+            continue
+        elif line.startswith("## "):
+            # Flush previous section
+            if current_section:
+                slides.append(f"## {current_section}\n" + "\n".join(current_body))
+            current_section = line[3:].strip()
+            current_body = []
+        else:
+            current_body.append(line)
+
+    # Flush last section
+    if current_section:
+        slides.append(f"## {current_section}\n" + "\n".join(current_body))
+
+    # Closing slide
+    slides.append("## Proximos pasos\n\nRevisar hallazgos y definir plan de accion.\n\n---\n*Field Genius Engine — Genius Labs AI*")
+
+    return "\n\n---\n\n".join(slides)
+
+
+class ExportSheetsRequest(BaseModel):
+    implementation_id: str
+    date_from: str | None = None
+    date_to: str | None = None
+    include_facts: bool = True
+    include_compliance: bool = True
+
+
+@router.post("/export-sheets")
+@limiter.limit("5/minute")
+async def export_sheets(request: Request, body: ExportSheetsRequest, user: BackofficeUser = Depends(require_permission("can_generate_reports"))) -> dict:
+    """Export structured data and facts to Google Sheets.
+
+    Creates/updates tabs:
+    - "Hechos Estructurados": facts from session_facts (entities, prices, alerts)
+    - "Compliance": user activity summary (sessions per user, dates, file counts)
+    """
+    try:
+        client = get_client()
+
+        # Verify Google Sheets config
+        if not settings.google_service_account_email or not settings.google_private_key:
+            raise HTTPException(status_code=400, detail="Google Sheets credentials not configured")
+
+        # Get implementation's spreadsheet ID
+        impl_result = (
+            client.table("implementations")
+            .select("id, name, google_spreadsheet_id")
+            .eq("id", body.implementation_id)
+            .maybe_single()
+            .execute()
+        )
+        if not impl_result.data:
+            raise HTTPException(status_code=404, detail="Implementation not found")
+
+        spreadsheet_id = impl_result.data.get("google_spreadsheet_id") or settings.google_spreadsheet_id
+        if not spreadsheet_id:
+            raise HTTPException(status_code=400, detail="No Google Spreadsheet ID configured for this implementation")
+
+        import gspread
+        from google.oauth2.service_account import Credentials
+
+        creds_info = {
+            "type": "service_account",
+            "client_email": settings.google_service_account_email,
+            "private_key": settings.google_private_key.replace("\\n", "\n"),
+            "token_uri": "https://oauth2.googleapis.com/token",
+        }
+        creds = Credentials.from_service_account_info(creds_info, scopes=[
+            "https://www.googleapis.com/auth/spreadsheets",
+        ])
+        gc = gspread.authorize(creds)
+        spreadsheet = gc.open_by_key(spreadsheet_id)
+
+        tabs_written: list[str] = []
+
+        # ── Tab 1: Structured Facts ──
+        if body.include_facts:
+            facts_query = (
+                client.table("session_facts")
+                .select("*, sessions!inner(user_name, user_phone, date, country)")
+                .eq("implementation_id", body.implementation_id)
+            )
+            if body.date_from:
+                facts_query = facts_query.gte("created_at", body.date_from)
+            if body.date_to:
+                facts_query = facts_query.lte("created_at", body.date_to)
+
+            facts_result = facts_query.execute()
+            facts_rows = facts_result.data or []
+
+            if facts_rows:
+                facts_data = _build_facts_sheet(facts_rows)
+                _write_sheet_tab(spreadsheet, "Hechos Estructurados", facts_data)
+                tabs_written.append(f"Hechos Estructurados ({len(facts_rows)} registros)")
+
+        # ── Tab 2: Compliance ──
+        if body.include_compliance:
+            compliance_data = await _get_compliance_data(client, body.implementation_id, body.date_from, body.date_to)
+            if compliance_data:
+                _write_sheet_tab(spreadsheet, "Compliance", compliance_data)
+                tabs_written.append(f"Compliance ({len(compliance_data) - 1} usuarios)")
+
+        return {
+            "success": True,
+            "data": {
+                "spreadsheet_id": spreadsheet_id,
+                "spreadsheet_url": f"https://docs.google.com/spreadsheets/d/{spreadsheet_id}",
+                "tabs_written": tabs_written,
+            },
+            "error": None,
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("export_sheets_failed", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def _build_facts_sheet(facts_rows: list[dict]) -> list[list[str]]:
+    """Convert session_facts into flat rows for Sheets."""
+    headers = [
+        "Fecha", "Ejecutivo", "Telefono", "Pais", "Framework",
+        "Entidad", "Tipo Entidad", "Menciones", "Contexto",
+        "Precio Item", "Precio Valor", "Moneda", "Promocion",
+        "Alerta Tipo", "Alerta Severidad", "Alerta Descripcion",
+        "Sentimiento Pos", "Sentimiento Neg", "Sentimiento Neutral",
+    ]
+    rows: list[list[str]] = [headers]
+
+    for fact_row in facts_rows:
+        session = fact_row.get("sessions", {})
+        facts = fact_row.get("facts") or {}
+        base = [
+            session.get("date", ""),
+            session.get("user_name", ""),
+            session.get("user_phone", ""),
+            session.get("country", ""),
+            fact_row.get("framework", ""),
+        ]
+
+        entities = facts.get("entities_mentioned", [])
+        prices = facts.get("prices_detected", [])
+        alerts = facts.get("alerts", [])
+        sentiment = facts.get("sentiment", {})
+
+        max_rows = max(len(entities), len(prices), len(alerts), 1)
+
+        for i in range(max_rows):
+            row = list(base)
+            # Entity
+            if i < len(entities):
+                e = entities[i]
+                row.extend([e.get("name", ""), e.get("type", ""), str(e.get("count", "")), e.get("context", "")])
+            else:
+                row.extend(["", "", "", ""])
+            # Price
+            if i < len(prices):
+                p = prices[i]
+                row.extend([p.get("item", ""), str(p.get("price", "")), p.get("currency", ""), str(p.get("is_promotion", ""))])
+            else:
+                row.extend(["", "", "", ""])
+            # Alert
+            if i < len(alerts):
+                a = alerts[i]
+                row.extend([a.get("type", ""), a.get("severity", ""), a.get("description", "")])
+            else:
+                row.extend(["", "", ""])
+            # Sentiment (only first row)
+            if i == 0:
+                row.extend([str(sentiment.get("positive", "")), str(sentiment.get("negative", "")), str(sentiment.get("neutral", ""))])
+            else:
+                row.extend(["", "", ""])
+
+            rows.append(row)
+
+    return rows
+
+
+async def _get_compliance_data(
+    client: Any, implementation_id: str, date_from: str | None, date_to: str | None
+) -> list[list[str]]:
+    """Build compliance matrix: which users sent data and which didn't."""
+    # Get all registered users for this implementation
+    users_result = (
+        client.table("users")
+        .select("phone, name, role, created_at")
+        .eq("implementation", implementation_id)
+        .execute()
+    )
+    all_users = {u["phone"]: u for u in (users_result.data or [])}
+
+    # Get sessions grouped by user
+    sessions_query = (
+        client.table("sessions")
+        .select("user_phone, user_name, date, status, raw_files")
+        .eq("implementation", implementation_id)
+    )
+    if date_from:
+        sessions_query = sessions_query.gte("date", date_from)
+    if date_to:
+        sessions_query = sessions_query.lte("date", date_to)
+
+    sessions_result = sessions_query.order("date").execute()
+    sessions = sessions_result.data or []
+
+    # Aggregate per user
+    user_stats: dict[str, dict[str, Any]] = {}
+    for s in sessions:
+        phone = s.get("user_phone", "")
+        if phone not in user_stats:
+            user_stats[phone] = {
+                "name": s.get("user_name", all_users.get(phone, {}).get("name", "")),
+                "sessions": 0,
+                "files": 0,
+                "images": 0,
+                "audio": 0,
+                "completed": 0,
+                "first_date": s.get("date"),
+                "last_date": s.get("date"),
+                "dates": set(),
+            }
+        stats = user_stats[phone]
+        stats["sessions"] += 1
+        stats["last_date"] = s.get("date")
+        stats["dates"].add(s.get("date", ""))
+        if s.get("status") == "completed":
+            stats["completed"] += 1
+        for f in (s.get("raw_files") or []):
+            stats["files"] += 1
+            if f.get("type") == "image":
+                stats["images"] += 1
+            elif f.get("type") == "audio":
+                stats["audio"] += 1
+
+    # Build output: include users with NO sessions too
+    headers = [
+        "Ejecutivo", "Telefono", "Rol", "Sesiones", "Completadas",
+        "Archivos", "Imagenes", "Audios", "Dias Activos",
+        "Primera Sesion", "Ultima Sesion", "Estado",
+    ]
+    rows: list[list[str]] = [headers]
+
+    # Active users (have sessions)
+    for phone, stats in sorted(user_stats.items(), key=lambda x: x[1]["sessions"], reverse=True):
+        role = all_users.get(phone, {}).get("role", "")
+        rows.append([
+            stats["name"],
+            phone,
+            role,
+            str(stats["sessions"]),
+            str(stats["completed"]),
+            str(stats["files"]),
+            str(stats["images"]),
+            str(stats["audio"]),
+            str(len(stats["dates"])),
+            stats["first_date"] or "",
+            stats["last_date"] or "",
+            "Activo",
+        ])
+
+    # Inactive users (registered but no sessions in range)
+    for phone, u in all_users.items():
+        if phone not in user_stats:
+            rows.append([
+                u.get("name", ""),
+                phone,
+                u.get("role", ""),
+                "0", "0", "0", "0", "0", "0", "", "",
+                "Sin actividad",
+            ])
+
+    return rows
+
+
+def _write_sheet_tab(spreadsheet: Any, tab_name: str, data: list[list[str]]) -> None:
+    """Write data to a Google Sheets tab, creating it if needed."""
+    try:
+        worksheet = spreadsheet.worksheet(tab_name)
+        worksheet.clear()
+    except Exception:
+        worksheet = spreadsheet.add_worksheet(title=tab_name, rows=len(data) + 10, cols=len(data[0]) + 2)
+
+    worksheet.update(range_name="A1", values=data, value_input_option="USER_ENTERED")
+
+
+# ── Compliance Endpoint ────────────────────────────────────────────
+
+
+@router.get("/compliance")
+async def get_compliance(
+    implementation_id: str,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    user: BackofficeUser = Depends(get_current_user),
+) -> dict:
+    """Get user compliance data: who sent sessions, who didn't, activity metrics."""
+    try:
+        client = get_client()
+        compliance_rows = await _get_compliance_data(client, implementation_id, date_from, date_to)
+
+        # Parse headers + rows into list of dicts for frontend
+        if len(compliance_rows) < 2:
+            return {"success": True, "data": {"users": [], "summary": {"total": 0, "active": 0, "inactive": 0}}, "error": None}
+
+        headers = compliance_rows[0]
+        users = []
+        active = 0
+        inactive = 0
+        for row in compliance_rows[1:]:
+            user_dict = dict(zip(headers, row))
+            users.append(user_dict)
+            if user_dict.get("Estado") == "Activo":
+                active += 1
+            else:
+                inactive += 1
+
+        return {
+            "success": True,
+            "data": {
+                "users": users,
+                "summary": {
+                    "total": active + inactive,
+                    "active": active,
+                    "inactive": inactive,
+                    "compliance_rate": round(active / (active + inactive) * 100, 1) if (active + inactive) > 0 else 0,
+                },
+            },
+            "error": None,
+        }
+    except Exception as e:
+        logger.error("get_compliance_failed", error=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ── Backoffice User Management ─────────────────────────────────────
 
 
