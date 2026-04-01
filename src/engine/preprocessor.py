@@ -13,9 +13,24 @@ from typing import Any
 
 import structlog
 
-from src.engine.supabase_client import update_file_in_session
+from src.engine.supabase_client import update_file_in_session, get_session
 
 logger = structlog.get_logger(__name__)
+
+
+async def _notify_content_issue(session_id: str, message: str) -> None:
+    """Send a WhatsApp notification about flagged/blocked content."""
+    try:
+        session = await get_session(session_id)
+        if not session:
+            return
+        phone = session.get("user_phone", "")
+        if not phone:
+            return
+        from src.channels.whatsapp.sender import send_message
+        await send_message(phone, message)
+    except Exception as e:
+        logger.warning("content_notification_failed", session_id=session_id, error=str(e))
 
 
 async def preprocess_file(
@@ -105,6 +120,11 @@ async def _preprocess_image(
         updates["blocked"] = True
         await update_file_in_session(session_id, filename, updates)
         logger.warning("preprocess_image_blocked", filename=filename, category=category)
+        # Notify user
+        await _notify_content_issue(
+            session_id,
+            "Esta foto fue bloqueada porque no corresponde a contenido de trabajo. No sera incluida en el analisis.",
+        )
         return
 
     if not classification["should_process"]:
@@ -113,6 +133,15 @@ async def _preprocess_image(
         updates["flagged"] = True
         await update_file_in_session(session_id, filename, updates)
         logger.info("preprocess_image_flagged", filename=filename, category=category)
+        # Notify user
+        reason = {
+            "PERSONAL": "parece ser una foto personal",
+            "CONFIDENTIAL": "parece contener un documento confidencial",
+        }.get(category, "no parece ser de una visita de campo")
+        await _notify_content_issue(
+            session_id,
+            f"Una de tus fotos {reason}. No sera incluida en el analisis. Si es un error, reenviala.",
+        )
         return
 
     # Step 3: Business-relevant — run Vision analysis
