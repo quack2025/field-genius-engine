@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import structlog
-from anthropic import Anthropic
+from anthropic import AsyncAnthropic
 
 from src.config.settings import settings
 from src.engine.schema_builder import build_system_prompt
@@ -138,46 +138,67 @@ Archivos analizados: {', '.join(visit.files)}
     return result
 
 
+_extractor_client: AsyncAnthropic | None = None
+
+
+def _get_extractor_client() -> AsyncAnthropic:
+    global _extractor_client
+    if _extractor_client is None:
+        _extractor_client = AsyncAnthropic(api_key=settings.anthropic_api_key, timeout=90.0)
+    return _extractor_client
+
+
 async def _call_claude_extraction(
     system_prompt: str,
     user_message: str,
     retry: bool = True,
+    max_api_retries: int = 2,
 ) -> dict[str, Any] | None:
-    """Call Claude Haiku for extraction and parse JSON response. Retry once on failure."""
-    try:
-        client = Anthropic(api_key=settings.anthropic_api_key, timeout=90.0)
-        message = client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=4096,
-            system=system_prompt,
-            messages=[{"role": "user", "content": user_message}],
-        )
+    """Call Claude Haiku for extraction with retry on API + JSON errors."""
+    import asyncio
 
-        response_text = message.content[0].text.strip()
-
-        # Parse JSON — handle markdown wrapping
-        json_text = response_text
-        if "```json" in json_text:
-            json_text = json_text.split("```json")[1].split("```")[0].strip()
-        elif "```" in json_text:
-            json_text = json_text.split("```")[1].split("```")[0].strip()
-
-        return json.loads(json_text)
-
-    except json.JSONDecodeError:
-        if retry:
-            logger.warning("extractor_json_retry", response=response_text[:200])
-            # Retry with explicit correction instruction
-            correction_msg = (
-                f"{user_message}\n\n"
-                "IMPORTANTE: Tu respuesta anterior no fue JSON válido. "
-                "Responde ÚNICAMENTE con el JSON, sin texto adicional ni markdown."
+    last_error = None
+    for attempt in range(max_api_retries + 1):
+        try:
+            client = _get_extractor_client()
+            message = await client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=4096,
+                system=system_prompt,
+                messages=[{"role": "user", "content": user_message}],
             )
-            return await _call_claude_extraction(system_prompt, correction_msg, retry=False)
-        else:
-            logger.error("extractor_json_failed_final", response=response_text[:200])
-            return None
 
-    except Exception as e:
-        logger.error("extractor_claude_failed", error=str(e))
-        return None
+            response_text = message.content[0].text.strip()
+
+            # Parse JSON — handle markdown wrapping
+            json_text = response_text
+            if "```json" in json_text:
+                json_text = json_text.split("```json")[1].split("```")[0].strip()
+            elif "```" in json_text:
+                json_text = json_text.split("```")[1].split("```")[0].strip()
+
+            return json.loads(json_text)
+
+        except json.JSONDecodeError:
+            if retry:
+                logger.warning("extractor_json_retry", response=response_text[:200])
+                correction_msg = (
+                    f"{user_message}\n\n"
+                    "IMPORTANTE: Tu respuesta anterior no fue JSON valido. "
+                    "Responde UNICAMENTE con el JSON, sin texto adicional ni markdown."
+                )
+                return await _call_claude_extraction(system_prompt, correction_msg, retry=False)
+            else:
+                logger.error("extractor_json_failed_final", response=response_text[:200])
+                return None
+
+        except Exception as e:
+            last_error = e
+            if attempt < max_api_retries:
+                wait = 2 ** attempt
+                logger.warning("extractor_api_retry", attempt=attempt + 1, wait=wait, error=str(e)[:100])
+                await asyncio.sleep(wait)
+            else:
+                logger.error("extractor_claude_failed", error=str(e), attempts=max_api_retries + 1)
+
+    return None

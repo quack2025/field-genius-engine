@@ -49,10 +49,10 @@ async def transcribe(storage_path: str) -> str:
         audio_file = io.BytesIO(audio_bytes)
         audio_file.name = filename
 
+        # Auto-detect language (supports Spanish, English, Portuguese, Creole, etc.)
         result = client.audio.transcriptions.create(
             model="whisper-1",
             file=audio_file,
-            language="es",
         )
 
         elapsed_ms = int((time.time() - start) * 1000)
@@ -83,10 +83,10 @@ async def transcribe_bytes(audio_bytes: bytes, filename: str = "audio.ogg") -> s
         audio_file = io.BytesIO(audio_bytes)
         audio_file.name = filename
 
+        # Auto-detect language (supports Spanish, English, Portuguese, Creole, etc.)
         result = client.audio.transcriptions.create(
             model="whisper-1",
             file=audio_file,
-            language="es",
         )
 
         elapsed_ms = int((time.time() - start) * 1000)
