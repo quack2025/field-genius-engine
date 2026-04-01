@@ -60,16 +60,17 @@
 - [ ] Idempotency-Key header en POST endpoints
 - [ ] Async report generation (return 202 + job_id, poll for result)
 
-### Sprint E-4: SUPABASE HARDENING (P1, 1 dia)
-- [ ] SET search_path = public en funciones SECURITY DEFINER
-- [ ] RLS policies para INSERT/UPDATE/DELETE (no solo SELECT)
-- [ ] Storage bucket policies para media bucket
-- [ ] Index en sessions(implementation) para RLS performance
-- [ ] CHECK constraint en users.role
+### Sprint E-4: SUPABASE HARDENING (P1) — COMPLETADO 2026-04-01
+- [x] SET search_path = public en funciones SECURITY DEFINER
+- [x] REVOKE EXECUTE FROM public, GRANT TO authenticated + service_role
+- [x] RLS policies para INSERT/UPDATE/DELETE (defense-in-depth)
+- [x] RLS enabled on usage_monthly
+- [x] 9 new indexes for RLS + query performance
+- [x] CHECK constraints: users.role, session_facts.framework
+- [x] updated_at trigger automatico (sessions, implementations, visit_types)
+- [x] CREATE TABLE IF NOT EXISTS consolidated_reports
 - [ ] Migrate RLS policies to use implementation_id consistently
 - [ ] NOT NULL constraint en implementation_id
-- [ ] updated_at trigger automatico (moddatetime)
-- [ ] CREATE TABLE IF NOT EXISTS para consolidated_reports en migracion
 
 ### Sprint E-5: OBSERVABILITY (P2, 1 dia)
 - [ ] Health check con dependency status (Supabase, Anthropic, OpenAI, Twilio)
