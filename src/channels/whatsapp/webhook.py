@@ -26,6 +26,29 @@ logger = structlog.get_logger(__name__)
 
 router = APIRouter(tags=["webhook"])
 
+# ── MessageSid dedup (in-memory with TTL cleanup) ──────────────────
+# Prevents Twilio retry from re-processing the same message
+_seen_sids: dict[str, float] = {}
+_DEDUP_TTL_SECONDS = 300  # 5 minutes
+
+
+def _is_duplicate(message_sid: str) -> bool:
+    """Check if MessageSid was already processed. Thread-safe for single process."""
+    import time
+    now = time.time()
+
+    # Cleanup expired entries (every 100th check)
+    if len(_seen_sids) > 100:
+        expired = [k for k, v in _seen_sids.items() if now - v > _DEDUP_TTL_SECONDS]
+        for k in expired:
+            _seen_sids.pop(k, None)
+
+    if message_sid in _seen_sids:
+        return True
+
+    _seen_sids[message_sid] = now
+    return False
+
 
 def validate_twilio_signature(url: str, params: dict, signature: str) -> bool:
     """Validate X-Twilio-Signature HMAC to verify request authenticity."""
@@ -63,6 +86,13 @@ async def twilio_webhook(request: Request) -> Response:
     form = await request.form()
     params = {k: str(v) for k, v in form.items()}
 
+    # ── Dedup: reject Twilio retries for the same message ──
+    message_sid = params.get("MessageSid", "")
+    if message_sid and _is_duplicate(message_sid):
+        logger.info("webhook_dedup_skip", message_sid=message_sid)
+        twiml = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
+        return Response(content=twiml, media_type="application/xml")
+
     # Validate Twilio signature — use hardcoded URL to prevent header spoofing
     signature = request.headers.get("X-Twilio-Signature", "")
     if settings.webhook_public_url:
@@ -91,6 +121,7 @@ async def twilio_webhook(request: Request) -> Response:
         phone=phone,
         body=body[:50] if body else "",
         num_media=num_media,
+        message_sid=message_sid[:12] if message_sid else "",
     )
 
     # Process location sharing (Twilio sends Latitude/Longitude params)
@@ -187,21 +218,20 @@ async def twilio_webhook(request: Request) -> Response:
 
         if result["action"] == "trigger":
             await send_message(from_phone, result["message"])
-            # Run the full pipeline
+            # Enqueue pipeline to background — NEVER run inline (blocks webhook 30-120s)
             import datetime as dt
             from src.engine.supabase_client import get_or_create_session
-            from src.engine.pipeline import process_session
             session = await get_or_create_session(phone, dt.date.today())
-            await process_session(session["id"])
+            asyncio.create_task(_run_pipeline_safe(session["id"], from_phone))
         elif result["action"] == "clarification_received":
             await send_message(from_phone, result["message"])
-            # Resume pipeline from Phase 2 with clarification context
-            from src.engine.pipeline import resume_after_clarification
+            # Resume pipeline in background
             session = result["session"]
-            await resume_after_clarification(
+            asyncio.create_task(_resume_pipeline_safe(
                 session["id"],
                 result["clarification_text"],
-            )
+                from_phone,
+            ))
         elif result["action"] == "empty_session":
             await send_message(from_phone, result["message"])
         elif result["action"] == "text_added":
@@ -211,6 +241,32 @@ async def twilio_webhook(request: Request) -> Response:
             if words_in_msg & intent_words:
                 await send_message(from_phone, "Para generar tu reporte escribe: *reporte*")
 
-    # Return empty TwiML response (Twilio expects XML)
+    # Return empty TwiML response immediately (Twilio expects XML within 15s)
     twiml = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
     return Response(content=twiml, media_type="application/xml")
+
+
+async def _run_pipeline_safe(session_id: str, reply_phone: str) -> None:
+    """Run pipeline in background. Catch errors and notify user."""
+    try:
+        from src.engine.pipeline import process_session
+        await process_session(session_id)
+    except Exception as e:
+        logger.error("pipeline_background_failed", session_id=session_id, error=str(e))
+        try:
+            await send_message(reply_phone, "Hubo un error generando tu reporte. Intenta de nuevo con *reporte*.")
+        except Exception:
+            pass
+
+
+async def _resume_pipeline_safe(session_id: str, clarification: str, reply_phone: str) -> None:
+    """Resume pipeline after clarification in background."""
+    try:
+        from src.engine.pipeline import resume_after_clarification
+        await resume_after_clarification(session_id, clarification)
+    except Exception as e:
+        logger.error("pipeline_resume_failed", session_id=session_id, error=str(e))
+        try:
+            await send_message(reply_phone, "Hubo un error procesando tu respuesta. Intenta de nuevo.")
+        except Exception:
+            pass
