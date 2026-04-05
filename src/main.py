@@ -76,14 +76,30 @@ app.add_exception_handler(Exception, generic_exception_handler)
 
 
 class RequestIdMiddleware(BaseHTTPMiddleware):
-    """Add X-Request-Id to every response + bind to structlog for correlation."""
+    """Add X-Request-Id + structured request/response logging."""
     async def dispatch(self, request: Request, call_next):
+        import time as _time
         request_id = request.headers.get("X-Request-Id", str(uuid.uuid4()))
         import structlog
         structlog.contextvars.clear_contextvars()
         structlog.contextvars.bind_contextvars(request_id=request_id)
+
+        start = _time.time()
         response = await call_next(request)
+        latency_ms = int((_time.time() - start) * 1000)
+
         response.headers["X-Request-Id"] = request_id
+
+        # Log request (skip health checks to reduce noise)
+        if not request.url.path.startswith("/health"):
+            structlog.get_logger().info(
+                "http_request",
+                method=request.method,
+                path=request.url.path,
+                status=response.status_code,
+                latency_ms=latency_ms,
+            )
+
         return response
 
 
@@ -173,18 +189,8 @@ async def health_deep() -> dict:
     except Exception:
         checks["supabase"] = "error"
 
-    # Anthropic API key
-    try:
-        from anthropic import AsyncAnthropic
-        client = AsyncAnthropic(api_key=settings.anthropic_api_key, timeout=5.0)
-        await client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=5,
-            messages=[{"role": "user", "content": "ping"}],
-        )
-        checks["anthropic"] = "ok"
-    except Exception:
-        checks["anthropic"] = "error"
+    # Anthropic API key — validate format only (no API call on every health check)
+    checks["anthropic"] = "ok" if settings.anthropic_api_key.startswith("sk-ant-") else "error"
 
     # OpenAI (check key format only — no API call to save cost)
     checks["openai"] = "ok" if settings.openai_api_key.startswith("sk-") else "missing"
