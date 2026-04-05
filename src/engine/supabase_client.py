@@ -104,13 +104,37 @@ async def get_or_create_session(
 
 
 async def add_file_to_session(session_id: str, file_metadata: dict[str, Any]) -> None:
-    """Append a file entry to a session's raw_files array (atomic)."""
+    """Add a file to session — writes to session_files table (normalized) + raw_files (compat)."""
     logger.info("add_file_to_session", session_id=session_id)
 
     import json
 
     def _sync():
         client = get_client()
+
+        # Write to normalized session_files table (O(1) insert)
+        row = {
+            "session_id": session_id,
+            "filename": file_metadata.get("filename"),
+            "storage_path": file_metadata.get("storage_path"),
+            "type": file_metadata.get("type", "unknown"),
+            "content_type": file_metadata.get("content_type"),
+            "size_bytes": file_metadata.get("size_bytes", 0),
+            "public_url": file_metadata.get("public_url"),
+            "latitude": file_metadata.get("latitude"),
+            "longitude": file_metadata.get("longitude"),
+            "address": file_metadata.get("address"),
+            "label": file_metadata.get("label"),
+        }
+        ts = file_metadata.get("timestamp")
+        if ts:
+            row["timestamp"] = ts
+        try:
+            client.table("session_files").insert(row).execute()
+        except Exception as e:
+            logger.warning("session_files_insert_failed", error=str(e))
+
+        # Also append to raw_files JSONB for backward compatibility
         try:
             client.rpc("append_file_to_session", {
                 "p_session_id": session_id,
@@ -131,11 +155,21 @@ async def add_file_to_session(session_id: str, file_metadata: dict[str, Any]) ->
 async def update_file_in_session(
     session_id: str, filename: str, updates: dict[str, Any]
 ) -> None:
-    """Update fields on a specific file entry in raw_files (atomic)."""
+    """Update fields on a file — writes to session_files table + raw_files (compat)."""
     import json
 
     def _sync():
         client = get_client()
+
+        # Update normalized table (O(1) — single row update by filename)
+        try:
+            client.table("session_files").update(updates).eq(
+                "session_id", session_id
+            ).eq("filename", filename).execute()
+        except Exception as e:
+            logger.warning("session_files_update_failed", error=str(e))
+
+        # Also update raw_files JSONB for backward compatibility
         try:
             client.rpc("update_file_in_session", {
                 "p_session_id": session_id,
