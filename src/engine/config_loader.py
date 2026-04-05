@@ -37,8 +37,8 @@ class ImplementationConfig:
     analysis_framework: dict[str, Any] | None = None
     country_config: dict[str, Any] = field(default_factory=dict)
     visit_types: dict[str, VisitTypeConfig] = field(default_factory=dict)
-    # Vision strategy: "sonnet_only" (default), "tiered" (Haiku first → Sonnet escalation)
-    vision_strategy: str = "sonnet_only"
+    # Vision strategy: "tiered" (default, Haiku first → Sonnet escalation), "sonnet_only"
+    vision_strategy: str = "tiered"
 
     def get_country_context(self, country_code: str) -> dict[str, Any]:
         """Get country-specific config. Falls back to first available or empty."""

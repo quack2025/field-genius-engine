@@ -23,12 +23,12 @@ logger = structlog.get_logger(__name__)
 SONNET = "claude-sonnet-4-20250514"
 HAIKU = "claude-haiku-4-5-20251001"
 
-# Thresholds for tiered escalation
-TIERED_MIN_CHARS = 200        # Haiku response shorter than this → escalate
-TIERED_MIN_ENTITIES = 2       # Fewer distinct product/brand mentions → escalate
+# Thresholds for tiered escalation — Haiku typically produces 2000-5000+ chars,
+# so escalation should only trigger on genuinely poor results
+TIERED_MIN_CHARS = 150        # Haiku response shorter than this → escalate
 TIERED_VAGUE_PHRASES = [      # Generic phrases that indicate shallow analysis
-    "se observa", "se puede ver", "la imagen muestra",
-    "varios productos", "different products", "some items",
+    "no es posible", "no se puede determinar", "imagen borrosa",
+    "no es legible", "cannot determine", "image is unclear",
 ]
 
 # Singleton async client
@@ -109,25 +109,23 @@ async def _analyze_tiered(
 
 
 def _should_escalate(haiku_result: str) -> tuple[bool, str]:
-    """Decide if Haiku result is too shallow and needs Sonnet escalation."""
+    """Decide if Haiku result is too shallow and needs Sonnet escalation.
+
+    Haiku typically produces 2000-5000+ chars with detailed brand/price analysis.
+    Escalation only triggers on genuinely poor results: errors, very short
+    responses, or explicit inability to analyze the image.
+    """
     if haiku_result.startswith("[Error"):
         return True, "haiku_error"
 
     if len(haiku_result) < TIERED_MIN_CHARS:
         return True, f"too_short_{len(haiku_result)}_chars"
 
-    # Check for vague/generic descriptions
+    # Check for explicit failure phrases (not vague — genuinely unable)
     lower = haiku_result.lower()
-    vague_count = sum(1 for phrase in TIERED_VAGUE_PHRASES if phrase in lower)
-    unique_words = len(set(lower.split()))
-    if vague_count >= 3 and unique_words < 80:
-        return True, f"vague_{vague_count}_phrases"
-
-    # Check if it mentions specific brands/prices (sign of useful detail)
-    has_numbers = any(c.isdigit() for c in haiku_result)
-    has_bold = "**" in haiku_result
-    if not has_numbers and not has_bold and len(haiku_result) < 400:
-        return True, "no_specifics"
+    failure_count = sum(1 for phrase in TIERED_VAGUE_PHRASES if phrase in lower)
+    if failure_count >= 2:
+        return True, f"analysis_failure_{failure_count}_phrases"
 
     return False, ""
 
