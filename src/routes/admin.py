@@ -3,10 +3,6 @@
 from __future__ import annotations
 
 import datetime
-from slowapi import Limiter
-from slowapi.util import get_remote_address
-
-limiter = Limiter(key_func=get_remote_address)
 from typing import Any
 
 import ipaddress
@@ -19,10 +15,22 @@ from pydantic import BaseModel
 from src.config.settings import settings
 from src.engine.supabase_client import get_client, get_user_by_phone
 from src.routes.auth import BackofficeUser, get_current_user, require_permission, require_superadmin
+from src.routes.rate_limit import limiter
 
 logger = structlog.get_logger(__name__)
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
+
+
+def _validate_date(value: str | None, field: str = "date") -> str | None:
+    """Validate date string is YYYY-MM-DD format. Returns validated string or raises 400."""
+    if not value:
+        return None
+    try:
+        datetime.date.fromisoformat(value)
+        return value
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail=f"Invalid {field} format. Use YYYY-MM-DD.")
 
 
 async def get_user_by_phone_or_none(phone: str) -> dict | None:
