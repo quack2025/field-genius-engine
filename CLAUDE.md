@@ -45,7 +45,8 @@ Este engine invierte el modelo: **captura en el flujo, estructura después**. El
 | Storage | Supabase Storage | Guardar media recibida |
 | Base de datos | Supabase PostgreSQL | Sesiones, reportes, usuarios |
 | Transcripción | OpenAI Whisper API | Voz → texto |
-| Visión | Claude Sonnet (claude-sonnet-4-20250514) | Análisis de fotos + frames de video |
+| Visión | Claude — tiered strategy (Haiku first → Sonnet fallback) | Análisis de fotos + frames de video |
+| Content Safety | Claude Haiku (async) | Clasificación BUSINESS/PERSONAL/NSFW |
 | Video | ffmpeg → frame sampling | Extraer frames + audio del video |
 | Clasificación | Claude Haiku (claude-haiku-4-5-20251001) | Extracción estructurada rápida |
 | Output tabular | Google Sheets API | Datos por fila para análisis |
@@ -312,11 +313,30 @@ El gerente ve todos los reportes del equipo consolidados
 | processing_time_ms | integer | |
 | created_at | timestamptz | |
 
+### session_files (NEW — normalized from raw_files JSONB)
+| Column | Type | Notes |
+|--------|------|-------|
+| id | uuid PK | |
+| session_id | uuid FK → sessions | |
+| filename | text | |
+| storage_path | text | Path in Supabase Storage |
+| type | text | image, audio, video, text, location |
+| content_type | text | MIME type |
+| size_bytes | integer | |
+| transcription | text | Whisper result (audio/video) |
+| image_description | text | Vision AI result (images) |
+| content_category | text | BUSINESS/PERSONAL/NSFW/CONFIDENTIAL/UNCLEAR |
+| blocked | boolean | NSFW content blocked |
+| flagged | boolean | Personal/confidential flagged |
+| created_at | timestamptz | |
+
+Note: `sessions.raw_files` JSONB still maintained for backward compatibility. New writes go to both.
+
 ### users
 | Column | Type | Notes |
 |--------|------|-------|
 | id | uuid PK | |
-| implementation | text | 'argos' |
+| implementation | text | |
 | phone | text UNIQUE | Para lookup por WhatsApp |
 | name | text | |
 | role | text | 'executive', 'manager' |
@@ -435,24 +455,67 @@ Para contexto completo del proyecto (arquitectura, DB schema, endpoints, pipelin
 
 ---
 
-## Sprints planificados
+## Sprint History
 
-### Sprints 1-5 — COMPLETED
+### Sprints 1-5 — Foundation
 Foundation, WhatsApp ingestion, pipeline, outputs, deploy to Railway.
 
 ### Sprint 6 — Pre-processing + Backoffice
-- Pre-process media at ingestion (Vision AI + Whisper in background)
-- Backoffice frontend (Vercel): Dashboard, Implementations, Sessions
+Pre-process media at ingestion (Vision AI + Whisper in background). Backoffice frontend (Vercel).
 
 ### Sprint 7 — Multi-Implementation + Laundry Care Demo
-- `laundry_care` implementation with 3 analysis frameworks (tactical/strategic/innovation)
-- `telecable` implementation with 3 frameworks (competidor/cliente/comunicacion)
-- WhatsApp menu for implementation switching ("menu" → select project)
-- On-demand report generation from backoffice (not WhatsApp trigger)
+`laundry_care` + `telecable` implementations, WhatsApp menu, on-demand report generation.
 
 ### Sprint 8 — Multi-Level Reports + User Groups
-- User groups (zone-based grouping)
-- Session facts extraction (structured data for aggregation)
-- Group-level and project-level report generation
-- Reports page in backoffice (Individual / Grupo / Proyecto tabs)
-- User Groups page in backoffice (CRUD + member management)
+User groups, session facts, group/project reports, Reports + UserGroups pages.
+
+### Sprint R-1 — Report Persistence + Export (Apr 5 2026)
+- Report persistence: saved reports load on page revisit (no re-generation)
+- Gamma export: copy structured content for gamma.app or API direct
+- Google Sheets export: structured facts + compliance data
+- Compliance page: who sends, who doesn't, activity metrics
+
+### Enterprise Audit (Apr 5 2026) — Score: 4/10 → 7.5/10
+Four agents (Security, Backend Architect, API Architect, Performance Benchmarker) audited the codebase.
+
+### Sprints E-1 to E-6 — Enterprise Hardening (Apr 5 2026)
+- **E-1**: Async Everything — all sync clients (Anthropic, OpenAI, Supabase) → async. Thread pool 100.
+- **E-2**: Webhook Hardening — MessageSid dedup, pipeline in background (not inline).
+- **E-3**: Security — removed transition auth bypass, disabled OpenAPI docs in prod, fixed Redis URL leak.
+- **E-4**: Rate Limiting — shared Limiter singleton (was orphaned), date validation.
+- **E-5**: Performance — config cache TTL (5min), shared AI semaphore (40 max), full UUID request IDs.
+- **E-6**: Infrastructure — request/response logging middleware, health check optimization.
+
+### Sprints O-1 to O-4 — Performance Optimization (Apr 5 2026)
+- **O-1**: Image resize to 1536px max before base64 (memory: 268MB → 16MB at 40 concurrent).
+- **O-2**: Exponential backoff + random jitter on all AI retries.
+- **O-3**: Normalized session_files table (O(1) inserts vs O(n²) JSONB).
+- **O-4**: Procfile with separate worker process for Railway.
+
+### Vision Strategy — Tiered (Apr 5 2026)
+A/B tested Sonnet vs Haiku on real pharmacy photos (Medellin). Haiku outperformed:
+1.8x more content, 1.6x more brands, 52% cheaper. Tiered is now default for all implementations.
+
+---
+
+## Current Architecture Notes
+
+### Vision Strategy
+- Default: `tiered` (Haiku first → Sonnet fallback if < 150 chars or analysis failure)
+- Configurable per implementation via `vision_strategy` column
+- Content Safety: always Haiku (classification only)
+
+### AI Concurrency
+- Shared semaphore: 40 max concurrent AI calls (src/engine/ai_semaphore.py)
+- Thread pool: 100 workers for async-wrapped sync calls
+- Retry: exponential backoff + jitter on all AI modules
+
+### Auth
+- JWT via Supabase Auth → `get_current_user()` dependency
+- Dev bypass: only in `ENVIRONMENT=development/dev/local` (NOT transition/production)
+- OpenAPI docs: disabled in production
+
+### Deploy
+- Railway: auto-deploy on push to `main`
+- Procfile: `web` (uvicorn) + `worker` (arq) — can run as separate services
+- Vercel: backoffice frontend auto-deploy on push to `master`
