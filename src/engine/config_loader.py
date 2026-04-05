@@ -37,6 +37,8 @@ class ImplementationConfig:
     analysis_framework: dict[str, Any] | None = None
     country_config: dict[str, Any] = field(default_factory=dict)
     visit_types: dict[str, VisitTypeConfig] = field(default_factory=dict)
+    # Vision strategy: "sonnet_only" (default), "tiered" (Haiku first → Sonnet escalation)
+    vision_strategy: str = "sonnet_only"
 
     def get_country_context(self, country_code: str) -> dict[str, Any]:
         """Get country-specific config. Falls back to first available or empty."""
@@ -75,6 +77,12 @@ async def get_vision_prompt(impl_id: str) -> str:
     """Get the vision system prompt for an implementation."""
     config = await get_implementation(impl_id)
     return config.vision_system_prompt
+
+
+async def get_vision_strategy(impl_id: str) -> str:
+    """Get the vision strategy for an implementation: 'sonnet_only' or 'tiered'."""
+    config = await get_implementation(impl_id)
+    return config.vision_strategy
 
 
 async def get_visit_types(impl_id: str) -> list[VisitTypeConfig]:
@@ -156,6 +164,7 @@ async def _load_from_db(impl_id: str) -> ImplementationConfig | None:
             trigger_words=trigger_words,
             analysis_framework=row.get("analysis_framework"),
             country_config=row.get("country_config") or {},
+            vision_strategy=row.get("vision_strategy", "sonnet_only"),
         )
 
         # Load visit types
