@@ -65,8 +65,9 @@ New integrations should use the `/v1/` prefix.
         {"name": "admin", "description": "Backoffice administration — implementations, users, sessions, reports"},
         {"name": "webhook", "description": "WhatsApp webhook for Twilio"},
     ],
-    docs_url="/docs",
-    redoc_url="/redoc",
+    docs_url="/docs" if _is_dev else None,
+    redoc_url="/redoc" if _is_dev else None,
+    openapi_url="/openapi.json" if _is_dev else None,
 )
 if HAS_SLOWAPI and limiter:
     app.state.limiter = limiter
@@ -131,7 +132,9 @@ async def startup() -> None:
             pool = await get_pool()
             if pool:
                 import structlog
-                structlog.get_logger().info("redis_connected", url=settings.redis_url[:30])
+                from urllib.parse import urlparse as _urlparse
+                _parsed = _urlparse(settings.redis_url)
+                structlog.get_logger().info("redis_connected", host=_parsed.hostname, port=_parsed.port)
         except Exception as e:
             import structlog
             structlog.get_logger().warning("redis_startup_failed_continuing_without", error=str(e))

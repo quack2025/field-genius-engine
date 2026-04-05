@@ -32,8 +32,9 @@ def get_client() -> Client:
     global _client
     if _client is None:
         # Use service_role_key to bypass RLS (backend service, not user-facing)
-        key = settings.supabase_service_role_key or settings.supabase_anon_key
-        _client = create_client(settings.supabase_url, key)
+        if not settings.supabase_service_role_key:
+            raise RuntimeError("SUPABASE_SERVICE_ROLE_KEY is required — anon key is not safe for backend")
+        _client = create_client(settings.supabase_url, settings.supabase_service_role_key)
         logger.info("supabase_client_initialized", url=settings.supabase_url)
     return _client
 

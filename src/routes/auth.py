@@ -110,16 +110,15 @@ async def get_current_user(request: Request) -> BackofficeUser:
     """
     auth_header = request.headers.get("Authorization", "")
 
-    # If no auth header, check if we're in transition mode (allow unauthenticated)
-    # TODO: Remove this fallback once frontend auth is verified working
+    # Development-only auth bypass (NEVER in production/transition)
     if not auth_header.startswith("Bearer "):
         from src.config.settings import settings
-        if settings.environment.lower() in ("development", "dev", "local", "transition"):
-            logger.warning("auth_bypassed_transition_mode")
+        if settings.environment.lower() in ("development", "dev", "local"):
+            logger.warning("auth_bypassed_dev_mode")
             return BackofficeUser({
                 "id": "anonymous",
                 "email": "anonymous",
-                "name": "Anonymous (transition)",
+                "name": "Anonymous (dev)",
                 "role": "superadmin",
                 "allowed_implementations": [],
                 "is_active": True,
