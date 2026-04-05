@@ -146,6 +146,8 @@ async def _analyze_with_model(
     from src.engine.ai_semaphore import get_ai_semaphore
     vision_prompt = await get_vision_prompt(implementation)
 
+    # Resize large images to reduce memory + API cost (max 1536px on longest side)
+    image_bytes = _resize_image(image_bytes)
     image_b64 = base64.standard_b64encode(image_bytes).decode("utf-8")
     media_type = _detect_media_type(image_bytes)
 
@@ -188,8 +190,9 @@ async def _analyze_with_model(
         except Exception as e:
             last_error = e
             if attempt < max_retries:
-                wait = 2 ** attempt
-                logger.warning("vision_retry", model=model_label, attempt=attempt + 1, wait=wait, error=str(e)[:100])
+                import random
+                wait = (2 ** attempt) + random.uniform(0, 1)  # Exponential backoff + jitter
+                logger.warning("vision_retry", model=model_label, attempt=attempt + 1, wait=round(wait, 1), error=str(e)[:100])
                 await asyncio.sleep(wait)
             else:
                 logger.error("vision_analyze_failed", model=model_label, error=str(e), attempts=max_retries + 1)
@@ -232,6 +235,60 @@ async def analyze_from_storage(
     sb = get_client()
     image_bytes = await _run(lambda: sb.storage.from_("media").download(storage_path))
     return await analyze_image(image_bytes, context, implementation)
+
+
+MAX_IMAGE_DIMENSION = 1536  # Claude Vision optimal: 1568px max, use 1536 for safety
+
+
+def _resize_image(image_bytes: bytes) -> bytes:
+    """Resize image if larger than MAX_IMAGE_DIMENSION on any side.
+
+    Reduces memory usage (6.7MB → ~400KB) and API input tokens.
+    Uses Pillow for JPEG/PNG/WebP. Returns original bytes if resize fails or unnecessary.
+    """
+    try:
+        from PIL import Image
+        import io
+
+        img = Image.open(io.BytesIO(image_bytes))
+        w, h = img.size
+
+        if max(w, h) <= MAX_IMAGE_DIMENSION:
+            return image_bytes  # Already small enough
+
+        # Calculate new dimensions preserving aspect ratio
+        if w > h:
+            new_w = MAX_IMAGE_DIMENSION
+            new_h = int(h * MAX_IMAGE_DIMENSION / w)
+        else:
+            new_h = MAX_IMAGE_DIMENSION
+            new_w = int(w * MAX_IMAGE_DIMENSION / h)
+
+        img = img.resize((new_w, new_h), Image.LANCZOS)
+
+        # Save as JPEG (best compression for photos)
+        buf = io.BytesIO()
+        if img.mode in ("RGBA", "P"):
+            img = img.convert("RGB")
+        img.save(buf, format="JPEG", quality=85, optimize=True)
+
+        resized = buf.getvalue()
+        logger.info(
+            "vision_image_resized",
+            original_size=len(image_bytes),
+            resized_size=len(resized),
+            original_dims=f"{w}x{h}",
+            resized_dims=f"{new_w}x{new_h}",
+            reduction_pct=round((1 - len(resized) / len(image_bytes)) * 100),
+        )
+        return resized
+
+    except ImportError:
+        logger.warning("pillow_not_installed_skipping_resize")
+        return image_bytes
+    except Exception as e:
+        logger.warning("image_resize_failed", error=str(e))
+        return image_bytes
 
 
 def _detect_media_type(image_bytes: bytes) -> str:

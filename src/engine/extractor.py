@@ -195,8 +195,9 @@ async def _call_claude_extraction(
         except Exception as e:
             last_error = e
             if attempt < max_api_retries:
-                wait = 2 ** attempt
-                logger.warning("extractor_api_retry", attempt=attempt + 1, wait=wait, error=str(e)[:100])
+                import random
+                wait = (2 ** attempt) + random.uniform(0, 1)
+                logger.warning("extractor_api_retry", attempt=attempt + 1, wait=round(wait, 1), error=str(e)[:100])
                 await asyncio.sleep(wait)
             else:
                 logger.error("extractor_claude_failed", error=str(e), attempts=max_api_retries + 1)
