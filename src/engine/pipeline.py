@@ -18,6 +18,7 @@ from src.engine.supabase_client import (
     update_session_status,
     save_visit_report,
     get_client,
+    _run,
 )
 
 logger = structlog.get_logger(__name__)
@@ -83,14 +84,14 @@ async def _generate_and_upload_pdf(
         date_str = session.get("date", str(datetime.date.today()))
         filename = f"reports/{session_id}/reporte_{date_str}.pdf"
 
-        client.storage.from_("media").upload(
+        await _run(lambda: client.storage.from_("media").upload(
             filename,
             pdf_bytes,
             {"content-type": "application/pdf"},
-        )
+        ))
 
         # Get public URL
-        url = client.storage.from_("media").get_public_url(filename)
+        url = await _run(lambda: client.storage.from_("media").get_public_url(filename))
         logger.info("pdf_uploaded", url=url, size_kb=len(pdf_bytes) // 1024)
         return url
 
@@ -176,12 +177,12 @@ async def process_session(session_id: str) -> PipelineResult:
                 f"Identifique {len(segmentation.visits)} visita(s). Extrayendo datos...",
             )
 
-        # Save segmentation result to session
+        # Save segmentation result to session (async via thread)
         client = get_client()
-        client.table("sessions").update({
+        await _run(lambda: client.table("sessions").update({
             "segments": segmentation.raw_json,
             "updated_at": datetime.datetime.now(datetime.UTC).isoformat(),
-        }).eq("id", session_id).execute()
+        }).eq("id", session_id).execute())
 
         # Step 3: Check if clarification needed
         if segmentation.needs_clarification:
@@ -266,9 +267,9 @@ async def process_session(session_id: str) -> PipelineResult:
                     report_id = report_data_list[i]["id"]
                     try:
                         client = get_client()
-                        client.table("visit_reports").update({
+                        await _run(lambda: client.table("visit_reports").update({
                             "strategic_analysis": analysis_md,
-                        }).eq("id", report_id).execute()
+                        }).eq("id", report_id).execute())
                         logger.info("pipeline_analysis_saved", report_id=report_id, chars=len(analysis_md))
                     except Exception as e:
                         logger.error("pipeline_analysis_save_failed", report_id=report_id, error=str(e))

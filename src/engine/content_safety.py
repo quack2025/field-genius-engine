@@ -6,7 +6,7 @@ content from entering the pipeline.
 
 Categories for images:
   - business_relevant: field visit photo (shelf, store, product, POP)
-  - personal: selfie, family photo, food, pet, screenshot
+  - personal: selfie, family photo, food, screenshot
   - nsfw: intimate/explicit content
   - confidential: document, contract, spreadsheet with sensitive data
   - unclear: can't determine (low quality, too dark, abstract)
@@ -18,25 +18,26 @@ For audio transcriptions:
 
 from __future__ import annotations
 
+import base64
 import re
 import time
 from typing import Any
 
 import structlog
-from anthropic import Anthropic
+from anthropic import AsyncAnthropic
 
 from src.config.settings import settings
 
 logger = structlog.get_logger(__name__)
 
-# Singleton Haiku client for cheap classification calls
-_haiku_client: Anthropic | None = None
+# Singleton async Haiku client for cheap classification calls
+_haiku_client: AsyncAnthropic | None = None
 
 
-def _get_haiku() -> Anthropic:
+def _get_haiku() -> AsyncAnthropic:
     global _haiku_client
     if _haiku_client is None:
-        _haiku_client = Anthropic(api_key=settings.anthropic_api_key, timeout=30.0)
+        _haiku_client = AsyncAnthropic(api_key=settings.anthropic_api_key, timeout=30.0)
     return _haiku_client
 
 
@@ -70,7 +71,6 @@ async def classify_image(image_bytes: bytes) -> dict[str, Any]:
     start = time.time()
 
     try:
-        import base64
         client = _get_haiku()
 
         # Detect media type
@@ -85,7 +85,7 @@ async def classify_image(image_bytes: bytes) -> dict[str, Any]:
 
         b64 = base64.standard_b64encode(image_bytes).decode("utf-8")
 
-        message = client.messages.create(
+        message = await client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=20,
             system=MODERATION_PROMPT,
@@ -103,7 +103,6 @@ async def classify_image(image_bytes: bytes) -> dict[str, Any]:
         # Normalize unexpected responses
         valid = {"BUSINESS", "PERSONAL", "NSFW", "CONFIDENTIAL", "UNCLEAR"}
         if category not in valid:
-            # Try to extract from response
             for v in valid:
                 if v in category:
                     category = v

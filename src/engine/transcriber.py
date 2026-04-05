@@ -1,4 +1,4 @@
-"""Transcriber — audio → text via OpenAI Whisper API."""
+"""Transcriber — audio → text via OpenAI Whisper API (async)."""
 
 from __future__ import annotations
 
@@ -7,15 +7,25 @@ import time
 from typing import Any
 
 import structlog
-from openai import OpenAI
+from openai import AsyncOpenAI
 
 from src.config.settings import settings
-from src.engine.supabase_client import get_client
+from src.engine.supabase_client import get_client, _run
 
 logger = structlog.get_logger(__name__)
 
 # Supported audio formats for Whisper
 SUPPORTED_FORMATS = {".ogg", ".mp3", ".mp4", ".m4a", ".wav", ".webm", ".mpeg"}
+
+# Singleton async client
+_openai_client: AsyncOpenAI | None = None
+
+
+def _get_openai() -> AsyncOpenAI:
+    global _openai_client
+    if _openai_client is None:
+        _openai_client = AsyncOpenAI(api_key=settings.openai_api_key, timeout=60.0)
+    return _openai_client
 
 
 async def transcribe(storage_path: str) -> str:
@@ -31,12 +41,11 @@ async def transcribe(storage_path: str) -> str:
     logger.info("transcribe_start", storage_path=storage_path)
 
     try:
-        # Download audio from Supabase Storage
+        # Download audio from Supabase Storage (async via thread)
         sb = get_client()
-        audio_bytes = sb.storage.from_("media").download(storage_path)
+        audio_bytes = await _run(lambda: sb.storage.from_("media").download(storage_path))
 
         if len(audio_bytes) < 1000:
-            # Very small file — likely <1 second or corrupt
             logger.info("transcribe_skip_short", storage_path=storage_path, size=len(audio_bytes))
             return ""
 
@@ -44,13 +53,12 @@ async def transcribe(storage_path: str) -> str:
         ext = storage_path.rsplit(".", 1)[-1] if "." in storage_path else "ogg"
         filename = f"audio.{ext}"
 
-        # Call Whisper API
-        client = OpenAI(api_key=settings.openai_api_key, timeout=60.0)
+        # Call Whisper API (async)
+        client = _get_openai()
         audio_file = io.BytesIO(audio_bytes)
         audio_file.name = filename
 
-        # Auto-detect language (supports Spanish, English, Portuguese, Creole, etc.)
-        result = client.audio.transcriptions.create(
+        result = await client.audio.transcriptions.create(
             model="whisper-1",
             file=audio_file,
         )
@@ -79,12 +87,11 @@ async def transcribe_bytes(audio_bytes: bytes, filename: str = "audio.ogg") -> s
     logger.info("transcribe_bytes_start", filename=filename, size=len(audio_bytes))
 
     try:
-        client = OpenAI(api_key=settings.openai_api_key, timeout=60.0)
+        client = _get_openai()
         audio_file = io.BytesIO(audio_bytes)
         audio_file.name = filename
 
-        # Auto-detect language (supports Spanish, English, Portuguese, Creole, etc.)
-        result = client.audio.transcriptions.create(
+        result = await client.audio.transcriptions.create(
             model="whisper-1",
             file=audio_file,
         )

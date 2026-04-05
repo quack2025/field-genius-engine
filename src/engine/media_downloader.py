@@ -10,7 +10,7 @@ import httpx
 import structlog
 
 from src.config.settings import settings
-from src.engine.supabase_client import get_client
+from src.engine.supabase_client import get_client, _run
 
 logger = structlog.get_logger(__name__)
 
@@ -86,13 +86,13 @@ async def download_and_store(
             logger.warning("media_too_large", size=len(file_bytes), max=MAX_FILE_SIZE, storage_path=storage_path)
             raise ValueError(f"File too large: {len(file_bytes)} bytes (max {MAX_FILE_SIZE})")
 
-        # Upload to Supabase Storage
+        # Upload to Supabase Storage (async via thread — avoid blocking event loop)
         client = get_client()
-        client.storage.from_("media").upload(
+        await _run(lambda: client.storage.from_("media").upload(
             path=storage_path,
             file=file_bytes,
             file_options={"content-type": content_type},
-        )
+        ))
 
         file_meta = {
             "filename": filename,
@@ -129,11 +129,11 @@ async def store_bytes(
     logger.info("media_store_bytes", storage_path=storage_path, size=len(file_bytes))
 
     client = get_client()
-    client.storage.from_("media").upload(
+    await _run(lambda: client.storage.from_("media").upload(
         path=storage_path,
         file=file_bytes,
         file_options={"content-type": content_type},
-    )
+    ))
 
     file_meta = {
         "filename": filename,

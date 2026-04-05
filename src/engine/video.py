@@ -37,9 +37,10 @@ async def process_video(storage_path: str) -> VideoResult:
     tmpdir = tempfile.mkdtemp(prefix="fge_video_")
 
     try:
-        # Download video from Storage
+        # Download video from Storage (async via thread)
+        from src.engine.supabase_client import _run
         sb = get_client()
-        video_bytes = sb.storage.from_("media").download(storage_path)
+        video_bytes = await _run(lambda: sb.storage.from_("media").download(storage_path))
 
         video_path = os.path.join(tmpdir, "input_video.mp4")
         with open(video_path, "wb") as f:

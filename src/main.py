@@ -118,7 +118,13 @@ if _is_dev:
 
 @app.on_event("startup")
 async def startup() -> None:
-    """Initialize Redis connection pool on startup (if configured)."""
+    """Initialize thread pool + Redis connection pool on startup."""
+    # Increase thread pool for async-wrapped sync calls (Supabase, etc.)
+    import asyncio
+    import concurrent.futures
+    loop = asyncio.get_event_loop()
+    loop.set_default_executor(concurrent.futures.ThreadPoolExecutor(max_workers=100))
+
     if settings.redis_url:
         try:
             from src.engine.worker import get_pool

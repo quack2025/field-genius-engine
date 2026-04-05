@@ -19,7 +19,7 @@ from typing import Any
 
 import structlog
 
-from src.engine.supabase_client import get_client
+from src.engine.supabase_client import get_client, _run
 
 logger = structlog.get_logger(__name__)
 
@@ -41,18 +41,18 @@ async def run_retention(
 
     logger.info("retention_start", cutoff=cutoff_str, dry_run=dry_run)
 
-    # Find sessions older than cutoff in batches (avoid OOM on large datasets)
+    # Find sessions older than cutoff in batches (async via thread)
     BATCH_SIZE = 200
     sessions: list[dict[str, Any]] = []
     offset = 0
     while True:
-        batch = (
+        batch = await _run(lambda o=offset: (
             client.table("sessions")
             .select("id, raw_files, date, user_phone")
             .lt("created_at", cutoff_str)
-            .range(offset, offset + BATCH_SIZE - 1)
+            .range(o, o + BATCH_SIZE - 1)
             .execute()
-        )
+        ))
         rows = batch.data or []
         sessions.extend(rows)
         if len(rows) < BATCH_SIZE:
@@ -78,7 +78,7 @@ async def run_retention(
             if storage_path and file_type in ("image", "audio", "video"):
                 if not dry_run:
                     try:
-                        client.storage.from_("media").remove([storage_path])
+                        await _run(lambda sp=storage_path: client.storage.from_("media").remove([sp]))
                         session_deleted += 1
                         total_bytes_freed += f.get("size_bytes", 0)
                     except Exception as e:
@@ -96,9 +96,11 @@ async def run_retention(
         # Update session with cleaned file entries (keep transcriptions/descriptions)
         if session_deleted > 0 and not dry_run:
             try:
-                client.table("sessions").update({
-                    "raw_files": updated_files,
-                }).eq("id", session["id"]).execute()
+                sid = session["id"]
+                uf = updated_files
+                await _run(lambda: client.table("sessions").update({
+                    "raw_files": uf,
+                }).eq("id", sid).execute())
             except Exception as e:
                 errors.append(f"session {session['id'][:8]}: {str(e)[:80]}")
 

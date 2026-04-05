@@ -100,10 +100,11 @@ async def _preprocess_image(
     start = time.time()
     logger.info("preprocess_image_start", filename=filename)
 
-    # Step 1: Download image for classification
+    # Step 1: Download image for classification (async via thread)
     try:
+        from src.engine.supabase_client import _run
         sb = get_client()
-        image_bytes = sb.storage.from_("media").download(storage_path)
+        image_bytes = await _run(lambda: sb.storage.from_("media").download(storage_path))
     except Exception as e:
         logger.error("preprocess_image_download_failed", filename=filename, error=str(e))
         return

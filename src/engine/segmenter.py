@@ -13,6 +13,16 @@ from anthropic import AsyncAnthropic
 from src.config.settings import settings
 from src.engine.transcriber import transcribe
 from src.engine.vision import analyze_from_storage
+
+# Singleton async client for segmentation
+_seg_client: AsyncAnthropic | None = None
+
+
+def _get_seg_client() -> AsyncAnthropic:
+    global _seg_client
+    if _seg_client is None:
+        _seg_client = AsyncAnthropic(api_key=settings.anthropic_api_key, timeout=180.0)
+    return _seg_client
 from src.engine.video import process_video
 from src.engine.transcriber import transcribe_bytes
 
@@ -220,8 +230,7 @@ y en clarification_message explica qué necesitas saber."""
 
     response_text = ""
     try:
-        async_client = AsyncAnthropic(api_key=settings.anthropic_api_key, timeout=180.0)
-        message = await async_client.messages.create(
+        message = await _get_seg_client().messages.create(
             model="claude-sonnet-4-20250514",
             max_tokens=4096,
             messages=[{"role": "user", "content": prompt}],
