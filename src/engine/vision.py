@@ -143,6 +143,7 @@ async def _analyze_with_model(
     logger.info("vision_analyze_start", model=model_label, size=len(image_bytes), context=context[:50] if context else "")
 
     from src.engine.config_loader import get_vision_prompt
+    from src.engine.ai_semaphore import get_ai_semaphore
     vision_prompt = await get_vision_prompt(implementation)
 
     image_b64 = base64.standard_b64encode(image_bytes).decode("utf-8")
@@ -155,19 +156,20 @@ async def _analyze_with_model(
     last_error = None
     for attempt in range(max_retries + 1):
         try:
-            client = _get_client()
-            message = await client.messages.create(
-                model=model,
-                max_tokens=1024,
-                system=vision_prompt,
-                messages=[{
-                    "role": "user",
-                    "content": [
-                        {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": image_b64}},
-                        {"type": "text", "text": user_text},
-                    ],
-                }],
-            )
+            async with get_ai_semaphore():
+                client = _get_client()
+                message = await client.messages.create(
+                    model=model,
+                    max_tokens=1024,
+                    system=vision_prompt,
+                    messages=[{
+                        "role": "user",
+                        "content": [
+                            {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": image_b64}},
+                            {"type": "text", "text": user_text},
+                        ],
+                    }],
+                )
 
             text = message.content[0].text.strip()
             elapsed_ms = int((time.time() - start) * 1000)

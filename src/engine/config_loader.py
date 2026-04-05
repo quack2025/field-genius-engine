@@ -49,25 +49,31 @@ class ImplementationConfig:
         return {}
 
 
-# Module-level cache
+# Module-level cache with TTL (5 minutes)
 _cache: dict[str, ImplementationConfig] = {}
+_cache_ts: dict[str, float] = {}
+_CACHE_TTL = 300  # seconds
 
 
 async def get_implementation(impl_id: str) -> ImplementationConfig:
-    """Get implementation config. Tries DB first, falls back to files."""
-    if impl_id in _cache:
+    """Get implementation config. Tries cache (5min TTL), then DB, then files."""
+    import time
+    now = time.time()
+    if impl_id in _cache and (now - _cache_ts.get(impl_id, 0)) < _CACHE_TTL:
         return _cache[impl_id]
 
     # Try DB
     config = await _load_from_db(impl_id)
     if config:
         _cache[impl_id] = config
+        _cache_ts[impl_id] = now
         return config
 
     # Fall back to files
     config = _load_from_files(impl_id)
     if config:
         _cache[impl_id] = config
+        _cache_ts[impl_id] = now
         return config
 
     raise ValueError(f"Implementation '{impl_id}' not found in DB or files")

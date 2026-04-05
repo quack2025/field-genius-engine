@@ -78,7 +78,7 @@ app.add_exception_handler(Exception, generic_exception_handler)
 class RequestIdMiddleware(BaseHTTPMiddleware):
     """Add X-Request-Id to every response + bind to structlog for correlation."""
     async def dispatch(self, request: Request, call_next):
-        request_id = request.headers.get("X-Request-Id", str(uuid.uuid4())[:8])
+        request_id = request.headers.get("X-Request-Id", str(uuid.uuid4()))
         import structlog
         structlog.contextvars.clear_contextvars()
         structlog.contextvars.bind_contextvars(request_id=request_id)
