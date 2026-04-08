@@ -50,9 +50,14 @@ async def get_user_by_phone(phone: str) -> dict[str, Any] | None:
 
 
 async def get_or_create_session(
-    phone: str, date: datetime.date
+    phone: str, date: datetime.date, implementation_override: str | None = None,
 ) -> dict[str, Any]:
-    """Get existing session for user+date or create a new one."""
+    """Get existing session for user+date or create a new one.
+
+    Args:
+        implementation_override: If set, forces this implementation instead of user's default.
+            Used when the webhook resolves implementation from the incoming Twilio number.
+    """
     logger.info("get_or_create_session", phone=phone, date=str(date))
 
     def _find():
@@ -74,7 +79,7 @@ async def get_or_create_session(
     # Look up user name and implementation
     user = await get_user_by_phone(phone)
     user_name = user["name"] if user else phone
-    impl_id = (
+    impl_id = implementation_override or (
         user.get("implementation", settings.default_implementation)
         if user
         else settings.default_implementation
@@ -198,6 +203,25 @@ async def get_session(session_id: str) -> dict[str, Any] | None:
         client = get_client()
         result = client.table("sessions").select("*").eq("id", session_id).maybe_single().execute()
         return result.data
+    return await _run(_sync)
+
+
+async def get_implementation_by_whatsapp_number(whatsapp_number: str) -> str | None:
+    """Resolve implementation ID from the Twilio WhatsApp number (To field).
+
+    Returns implementation_id or None if no match found.
+    """
+    def _sync():
+        client = get_client()
+        result = (
+            client.table("implementations")
+            .select("id")
+            .eq("whatsapp_number", whatsapp_number)
+            .eq("status", "active")
+            .maybe_single()
+            .execute()
+        )
+        return result.data["id"] if result.data else None
     return await _run(_sync)
 
 

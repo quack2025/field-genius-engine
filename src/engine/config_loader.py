@@ -39,6 +39,8 @@ class ImplementationConfig:
     visit_types: dict[str, VisitTypeConfig] = field(default_factory=dict)
     # Vision strategy: "tiered" (default, Haiku first → Sonnet escalation), "sonnet_only"
     vision_strategy: str = "tiered"
+    # Per-client WhatsApp number (Twilio format: whatsapp:+1XXXXXXXXXX)
+    whatsapp_number: str = ""
 
     def get_country_context(self, country_code: str) -> dict[str, Any]:
         """Get country-specific config. Falls back to first available or empty."""
@@ -171,6 +173,7 @@ async def _load_from_db(impl_id: str) -> ImplementationConfig | None:
             analysis_framework=row.get("analysis_framework"),
             country_config=row.get("country_config") or {},
             vision_strategy=row.get("vision_strategy", "sonnet_only"),
+            whatsapp_number=row.get("whatsapp_number", ""),
         )
 
         # Load visit types

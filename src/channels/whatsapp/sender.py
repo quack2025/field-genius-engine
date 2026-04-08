@@ -21,10 +21,34 @@ def get_twilio_client() -> Client:
     return _twilio_client
 
 
-async def send_message(to_phone: str, body: str) -> str | None:
+async def _resolve_from_number(to_phone: str) -> str:
+    """Resolve the WhatsApp from number for a user based on their implementation.
+
+    Looks up the user's implementation → implementation's whatsapp_number.
+    Falls back to the global default if no per-implementation number is configured.
+    """
+    try:
+        from src.engine.supabase_client import get_user_by_phone
+        phone = to_phone.replace("whatsapp:", "")
+        user = await get_user_by_phone(phone)
+        if user:
+            impl_id = user.get("implementation", "")
+            if impl_id:
+                from src.engine.config_loader import get_implementation
+                config = await get_implementation(impl_id)
+                if config.whatsapp_number:
+                    return config.whatsapp_number
+    except Exception as e:
+        logger.warning("resolve_from_number_failed", error=str(e))
+
+    return settings.twilio_whatsapp_number
+
+
+async def send_message(to_phone: str, body: str, from_number: str | None = None) -> str | None:
     """Send a WhatsApp text message via Twilio.
 
     Automatically splits messages exceeding Twilio's 1600 char limit.
+    Uses per-implementation number if available, otherwise global default.
     Returns the last message SID on success, None on failure.
     """
     MAX_CHARS = 1500  # Leave margin below Twilio's 1600 limit
@@ -32,6 +56,7 @@ async def send_message(to_phone: str, body: str) -> str | None:
     try:
         client = get_twilio_client()
         to_whatsapp = f"whatsapp:{to_phone}" if not to_phone.startswith("whatsapp:") else to_phone
+        from_whatsapp = from_number or await _resolve_from_number(to_phone)
 
         # Split long messages into chunks
         chunks = _split_message(body, MAX_CHARS) if len(body) > MAX_CHARS else [body]
@@ -39,7 +64,7 @@ async def send_message(to_phone: str, body: str) -> str | None:
 
         for i, chunk in enumerate(chunks):
             message = client.messages.create(
-                from_=settings.twilio_whatsapp_number,
+                from_=from_whatsapp,
                 to=to_whatsapp,
                 body=chunk,
             )
@@ -83,14 +108,15 @@ def _split_message(text: str, max_chars: int) -> list[str]:
     return chunks
 
 
-async def send_media(to_phone: str, body: str, media_url: str) -> str | None:
+async def send_media(to_phone: str, body: str, media_url: str, from_number: str | None = None) -> str | None:
     """Send a WhatsApp message with media attachment via Twilio."""
     try:
         client = get_twilio_client()
         to_whatsapp = f"whatsapp:{to_phone}" if not to_phone.startswith("whatsapp:") else to_phone
+        from_whatsapp = from_number or await _resolve_from_number(to_phone)
 
         message = client.messages.create(
-            from_=settings.twilio_whatsapp_number,
+            from_=from_whatsapp,
             to=to_whatsapp,
             body=body,
             media_url=[media_url],

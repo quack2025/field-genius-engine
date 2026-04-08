@@ -107,6 +107,7 @@ async def twilio_webhook(request: Request) -> Response:
         return Response(content="Forbidden", status_code=403)
 
     from_phone = params.get("From", "")  # whatsapp:+573001234567
+    to_number = params.get("To", "")      # whatsapp:+17792284312
     body = params.get("Body", "").strip()
     try:
         num_media = min(int(params.get("NumMedia", "0")), 10)  # Twilio max is 10
@@ -116,12 +117,20 @@ async def twilio_webhook(request: Request) -> Response:
     # Strip 'whatsapp:' prefix for internal use
     phone = from_phone.replace("whatsapp:", "")
 
+    # Resolve implementation from the Twilio number the message was sent TO
+    resolved_impl = None
+    if to_number:
+        from src.engine.supabase_client import get_implementation_by_whatsapp_number
+        resolved_impl = await get_implementation_by_whatsapp_number(to_number)
+
     logger.info(
         "webhook_received",
         phone=phone,
         body=body[:50] if body else "",
         num_media=num_media,
         message_sid=message_sid[:12] if message_sid else "",
+        to_number=to_number,
+        resolved_impl=resolved_impl,
     )
 
     # Process location sharing (Twilio sends Latitude/Longitude params)
@@ -132,7 +141,7 @@ async def twilio_webhook(request: Request) -> Response:
             import datetime
             from src.engine.supabase_client import get_or_create_session
 
-            session = await get_or_create_session(phone, datetime.date.today())
+            session = await get_or_create_session(phone, datetime.date.today(), resolved_impl)
             location_meta = {
                 "filename": None,
                 "storage_path": None,
@@ -169,7 +178,7 @@ async def twilio_webhook(request: Request) -> Response:
             import datetime
             from src.engine.supabase_client import get_or_create_session
 
-            session = await get_or_create_session(phone, datetime.date.today())
+            session = await get_or_create_session(phone, datetime.date.today(), resolved_impl)
 
             # Download media and upload to Supabase Storage
             file_meta = await download_and_store(
@@ -221,7 +230,7 @@ async def twilio_webhook(request: Request) -> Response:
             # Enqueue pipeline to background — NEVER run inline (blocks webhook 30-120s)
             import datetime as dt
             from src.engine.supabase_client import get_or_create_session
-            session = await get_or_create_session(phone, dt.date.today())
+            session = await get_or_create_session(phone, dt.date.today(), resolved_impl)
             asyncio.create_task(_run_pipeline_safe(session["id"], from_phone))
         elif result["action"] == "clarification_received":
             await send_message(from_phone, result["message"])
