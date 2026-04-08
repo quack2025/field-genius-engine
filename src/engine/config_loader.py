@@ -41,6 +41,8 @@ class ImplementationConfig:
     vision_strategy: str = "tiered"
     # Per-client WhatsApp number (Twilio format: whatsapp:+1XXXXXXXXXX)
     whatsapp_number: str = ""
+    # Access control: "open" (anyone can use) or "whitelist" (registered users only)
+    access_mode: str = "open"
 
     def get_country_context(self, country_code: str) -> dict[str, Any]:
         """Get country-specific config. Falls back to first available or empty."""
@@ -174,6 +176,7 @@ async def _load_from_db(impl_id: str) -> ImplementationConfig | None:
             country_config=row.get("country_config") or {},
             vision_strategy=row.get("vision_strategy", "sonnet_only"),
             whatsapp_number=row.get("whatsapp_number", ""),
+            access_mode=row.get("access_mode", "open"),
         )
 
         # Load visit types

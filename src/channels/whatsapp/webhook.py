@@ -133,6 +133,26 @@ async def twilio_webhook(request: Request) -> Response:
         resolved_impl=resolved_impl,
     )
 
+    # ── Access control: whitelist check ──
+    if resolved_impl:
+        try:
+            from src.engine.config_loader import get_implementation
+            impl_config = await get_implementation(resolved_impl)
+            if impl_config.access_mode == "whitelist":
+                from src.engine.supabase_client import get_user_by_phone
+                user = await get_user_by_phone(phone)
+                if not user or user.get("implementation") != resolved_impl:
+                    logger.warning("webhook_access_denied", phone=phone, impl=resolved_impl)
+                    await send_message(
+                        from_phone,
+                        "No tienes acceso a este servicio. Contacta a tu administrador para ser registrado.",
+                    )
+                    twiml = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
+                    return Response(content=twiml, media_type="application/xml")
+        except Exception as e:
+            logger.error("access_check_failed", phone=phone, error=str(e))
+            # On error, allow through (don't block the pipeline)
+
     # Process location sharing (Twilio sends Latitude/Longitude params)
     latitude = params.get("Latitude")
     longitude = params.get("Longitude")
