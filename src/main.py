@@ -22,6 +22,8 @@ from src.utils.logger import setup_logging
 
 setup_logging()
 
+_is_dev = settings.environment.lower() in ("development", "dev", "local")
+
 # Fail-fast: warn about missing critical secrets at startup
 _missing = []
 if not settings.anthropic_api_key:
@@ -121,7 +123,6 @@ app.include_router(admin_router, prefix="/v1")  # /v1/api/admin/*
 app.include_router(admin_router)  # /api/admin/*
 
 # Simulate router only in development (not production)
-_is_dev = settings.environment.lower() in ("development", "dev", "local")
 if _is_dev:
     app.include_router(simulate_router)
 
