@@ -2222,3 +2222,76 @@ async def test_digest(
         "data": {"preview": data, "sent_to": email} if sent else None,
         "error": None if sent else "Email sending failed — check RESEND_API_KEY",
     }
+
+
+# ── Failed Jobs (Dead Letter Queue) ──────────────────────────────
+
+
+@router.get("/failed-jobs")
+async def list_failed_jobs(
+    status: str = "failed",
+    limit: int = 50,
+    offset: int = 0,
+    user: BackofficeUser = Depends(require_superadmin()),
+) -> dict:
+    """List failed jobs from the dead letter queue. Superadmin only."""
+    client = get_client()
+    query = (
+        client.table("failed_jobs")
+        .select("*", count="exact")
+        .order("created_at", desc=True)
+        .range(offset, offset + limit - 1)
+    )
+    if status != "all":
+        query = query.eq("status", status)
+    result = query.execute()
+    total = result.count or 0
+    return {
+        "success": True,
+        "data": result.data or [],
+        "pagination": {"total": total, "limit": limit, "offset": offset, "has_more": offset + limit < total},
+        "error": None,
+    }
+
+
+@router.post("/failed-jobs/{job_row_id}/retry")
+async def retry_failed_job(job_row_id: str, user: BackofficeUser = Depends(require_superadmin())) -> dict:
+    """Re-enqueue a failed job. Marks it as 'retried' in the DLQ."""
+    client = get_client()
+    row = client.table("failed_jobs").select("*").eq("id", job_row_id).maybe_single().execute()
+    if not row.data:
+        raise HTTPException(status_code=404, detail="Failed job not found")
+
+    job = row.data
+    if job["status"] != "failed":
+        raise HTTPException(status_code=400, detail=f"Job is already {job['status']}")
+
+    # Re-enqueue to arq
+    args = job.get("args_json") or {}
+    session_id = args.get("session_id", "")
+    file_meta = args.get("file_meta", {})
+    impl = args.get("implementation", "")
+
+    if session_id and file_meta:
+        from src.engine.worker import enqueue_preprocess
+        await enqueue_preprocess(session_id, file_meta, implementation=impl)
+
+    # Mark as retried
+    client.table("failed_jobs").update({
+        "status": "retried",
+        "resolved_at": datetime.datetime.now(datetime.UTC).isoformat(),
+    }).eq("id", job_row_id).execute()
+
+    logger.info("failed_job_retried", job_row_id=job_row_id)
+    return {"success": True, "data": {"status": "retried"}, "error": None}
+
+
+@router.post("/failed-jobs/{job_row_id}/resolve")
+async def resolve_failed_job(job_row_id: str, user: BackofficeUser = Depends(require_superadmin())) -> dict:
+    """Mark a failed job as resolved (manually handled). Superadmin only."""
+    client = get_client()
+    client.table("failed_jobs").update({
+        "status": "resolved",
+        "resolved_at": datetime.datetime.now(datetime.UTC).isoformat(),
+    }).eq("id", job_row_id).execute()
+    return {"success": True, "data": {"status": "resolved"}, "error": None}

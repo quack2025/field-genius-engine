@@ -146,16 +146,30 @@ async def process_file(
 
 
 async def _on_job_failure(ctx: dict, error: BaseException) -> None:
-    """Called when a job fails after all retries. Logs to DB for monitoring."""
-    job = ctx.get("job_id", "unknown")
-    logger.error("job_permanently_failed", job_id=job, error=str(error), error_type=type(error).__name__)
+    """Called when a job fails after all retries. Saves to dead letter queue."""
+    import json as _json
+    job_id = ctx.get("job_id", "unknown")
+    func_name = ctx.get("job_function_name", "unknown")
+    args = ctx.get("job_args")
+
+    logger.error("job_permanently_failed", job_id=job_id, function=func_name, error=str(error), error_type=type(error).__name__)
     try:
         from src.engine.supabase_client import get_client
         client = get_client()
+        args_json = None
+        if args:
+            try:
+                args_json = _json.loads(_json.dumps(args, default=str))
+            except Exception:
+                args_json = {"raw": str(args)[:500]}
+
         client.table("failed_jobs").insert({
-            "job_id": str(job),
+            "job_id": str(job_id),
+            "function_name": func_name,
+            "args_json": args_json,
             "error": str(error)[:500],
             "error_type": type(error).__name__,
+            "retries": ctx.get("job_try", 0),
         }).execute()
     except Exception:
         pass  # Best effort — don't crash the worker
