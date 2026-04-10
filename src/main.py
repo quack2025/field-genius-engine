@@ -92,6 +92,12 @@ class RequestIdMiddleware(BaseHTTPMiddleware):
 
         response.headers["X-Request-Id"] = request_id
 
+        # Deprecation header for unversioned API routes
+        if request.url.path.startswith("/api/admin/") and not request.url.path.startswith("/v1/"):
+            response.headers["Deprecation"] = "true"
+            response.headers["Sunset"] = "2026-10-01"
+            response.headers["Link"] = '</v1' + request.url.path + '>; rel="successor-version"'
+
         # Log request (skip health checks to reduce noise)
         if not request.url.path.startswith("/health"):
             structlog.get_logger().info(

@@ -109,13 +109,24 @@ class TestExtractionRequest(BaseModel):
 
 
 @router.get("/implementations")
-async def list_implementations(user: BackofficeUser = Depends(get_current_user)) -> dict:
+async def list_implementations(
+    limit: int = 50,
+    offset: int = 0,
+    user: BackofficeUser = Depends(get_current_user),
+) -> dict:
     client = get_client()
-    query = client.table("implementations").select("*").order("name")
+    query = client.table("implementations").select("*", count="exact").order("name")
     if not user.is_superadmin:
         query = query.in_("id", user.allowed_implementations)
+    query = query.range(offset, offset + limit - 1)
     result = query.execute()
-    return {"success": True, "data": result.data or [], "error": None}
+    total = result.count or 0
+    return {
+        "success": True,
+        "data": result.data or [],
+        "pagination": {"total": total, "limit": limit, "offset": offset, "has_more": offset + limit < total},
+        "error": None,
+    }
 
 
 @router.post("/implementations")
@@ -285,18 +296,30 @@ async def delete_visit_type(vt_id: str, user: BackofficeUser = Depends(require_p
 
 
 @router.get("/implementations/{impl_id}/users")
-async def list_users(impl_id: str, user: BackofficeUser = Depends(get_current_user)) -> dict:
+async def list_users(
+    impl_id: str,
+    limit: int = 50,
+    offset: int = 0,
+    user: BackofficeUser = Depends(get_current_user),
+) -> dict:
     if not user.has_impl_access(impl_id):
         raise HTTPException(status_code=403, detail="Access denied")
     client = get_client()
     result = (
         client.table("users")
-        .select("*")
+        .select("*", count="exact")
         .eq("implementation", impl_id)
         .order("name")
+        .range(offset, offset + limit - 1)
         .execute()
     )
-    return {"success": True, "data": result.data or [], "error": None}
+    total = result.count or 0
+    return {
+        "success": True,
+        "data": result.data or [],
+        "pagination": {"total": total, "limit": limit, "offset": offset, "has_more": offset + limit < total},
+        "error": None,
+    }
 
 
 @router.post("/implementations/{impl_id}/users")
@@ -1098,13 +1121,25 @@ class UserGroupCreate(BaseModel):
 
 
 @router.get("/user-groups")
-async def list_user_groups(impl: str | None = None, user: BackofficeUser = Depends(get_current_user)) -> dict:
+async def list_user_groups(
+    impl: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+    user: BackofficeUser = Depends(get_current_user),
+) -> dict:
     client = get_client()
-    query = client.table("user_groups").select("*").order("name")
+    query = client.table("user_groups").select("*", count="exact").order("name")
     if impl:
         query = query.eq("implementation_id", impl)
+    query = query.range(offset, offset + limit - 1)
     result = query.execute()
-    return {"success": True, "data": result.data or [], "error": None}
+    total = result.count or 0
+    return {
+        "success": True,
+        "data": result.data or [],
+        "pagination": {"total": total, "limit": limit, "offset": offset, "has_more": offset + limit < total},
+        "error": None,
+    }
 
 
 @router.post("/implementations/{impl_id}/user-groups")
@@ -1444,6 +1479,7 @@ async def list_reports(
     implementation_id: str | None = None,
     framework: str | None = None,
     limit: int = 50,
+    offset: int = 0,
     user: BackofficeUser = Depends(get_current_user),
 ) -> dict:
     """List saved reports from consolidated_reports. Supports filtering."""
@@ -1451,10 +1487,10 @@ async def list_reports(
         client = get_client()
         query = (
             client.table("consolidated_reports")
-            .select("id, implementation_id, title, framework, filters, status, created_at, analysis_markdown")
+            .select("id, implementation_id, title, framework, filters, status, created_at, analysis_markdown", count="exact")
             .eq("status", "completed")
             .order("created_at", desc=True)
-            .limit(limit)
+            .range(offset, offset + limit - 1)
         )
         if session_id:
             query = query.contains("filters", {"session_id": session_id})
@@ -1464,7 +1500,13 @@ async def list_reports(
             query = query.eq("framework", framework)
 
         result = query.execute()
-        return {"success": True, "data": result.data or [], "error": None}
+        total = result.count or 0
+        return {
+            "success": True,
+            "data": result.data or [],
+            "pagination": {"total": total, "limit": limit, "offset": offset, "has_more": offset + limit < total},
+            "error": None,
+        }
     except Exception as e:
         logger.error("list_reports_failed", error=str(e))
         raise HTTPException(status_code=500, detail="Internal error")
@@ -1922,11 +1964,27 @@ class BackofficeUserCreate(BaseModel):
 
 
 @router.get("/backoffice-users")
-async def list_backoffice_users_endpoint(user: BackofficeUser = Depends(require_superadmin())) -> dict:
+async def list_backoffice_users_endpoint(
+    limit: int = 50,
+    offset: int = 0,
+    user: BackofficeUser = Depends(require_superadmin()),
+) -> dict:
     """List all backoffice users. Superadmin only."""
-    from src.routes.auth import list_backoffice_users
-    users = await list_backoffice_users()
-    return {"success": True, "data": users, "error": None}
+    client = get_client()
+    result = (
+        client.table("backoffice_users")
+        .select("*", count="exact")
+        .order("created_at")
+        .range(offset, offset + limit - 1)
+        .execute()
+    )
+    total = result.count or 0
+    return {
+        "success": True,
+        "data": result.data or [],
+        "pagination": {"total": total, "limit": limit, "offset": offset, "has_more": offset + limit < total},
+        "error": None,
+    }
 
 
 @router.post("/backoffice-users")
