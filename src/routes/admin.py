@@ -2087,3 +2087,61 @@ async def get_usage(impl: str | None = None, user: BackofficeUser = Depends(get_
         },
         "error": None,
     }
+
+
+# ── Digest (Cron) ──────────────────────────────────────────────────
+
+
+@router.post("/send-digest")
+async def send_digest(
+    implementation_id: str | None = None,
+    user: BackofficeUser = Depends(require_permission("can_generate_reports")),
+) -> dict:
+    """Send daily digest email for one or all implementations.
+
+    Call manually from backoffice or via Railway cron.
+    Only sends to implementations with digest.enabled=true and digest.emails configured.
+    """
+    from src.engine.digest import run_digest_for_implementation
+    client = get_client()
+
+    if implementation_id:
+        impl_ids = [implementation_id]
+    else:
+        result = client.table("implementations").select("id").eq("status", "active").execute()
+        impl_ids = [r["id"] for r in (result.data or [])]
+
+    results = []
+    for impl_id in impl_ids:
+        try:
+            r = await run_digest_for_implementation(impl_id)
+            results.append(r)
+        except Exception as e:
+            logger.error("digest_failed", implementation=impl_id, error=str(e))
+            results.append({"implementation_id": impl_id, "status": "error", "error": str(e)[:100]})
+
+    return {"success": True, "data": {"digests": results}, "error": None}
+
+
+@router.post("/test-digest")
+async def test_digest(
+    implementation_id: str,
+    email: str,
+    user: BackofficeUser = Depends(require_superadmin()),
+) -> dict:
+    """Generate and send a test digest to a specific email. Superadmin only."""
+    from src.engine.digest import generate_digest, build_digest_html, send_digest_email
+
+    data = await generate_digest(implementation_id)
+    if not data:
+        return {"success": False, "data": None, "error": "No activity today for this implementation"}
+
+    html = build_digest_html(data)
+    subject = f"[TEST] Resumen del dia — {data['implementation_name']} | {data['date']}"
+    sent = await send_digest_email([email], subject, html)
+
+    return {
+        "success": sent,
+        "data": {"preview": data, "sent_to": email} if sent else None,
+        "error": None if sent else "Email sending failed — check RESEND_API_KEY",
+    }

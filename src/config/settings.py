@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     google_private_key: str | None = None
     google_spreadsheet_id: str | None = None
     gamma_api_key: str | None = None
+    resend_api_key: str = ""  # For digest emails
 
     # Redis (job queue)
     redis_url: str = ""  # redis://default:xxx@host:port
