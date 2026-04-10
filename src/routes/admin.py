@@ -130,7 +130,7 @@ async def create_implementation(body: ImplementationCreate, user: BackofficeUser
         logger.info("implementation_created", id=body.id)
         return {"success": True, "data": result.data[0], "error": None}
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail="Invalid request")
 
 
 @router.get("/implementations/{impl_id}")
@@ -175,7 +175,7 @@ async def update_implementation(impl_id: str, body: ImplementationUpdate, user: 
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail="Invalid request")
 
 
 @router.delete("/implementations/{impl_id}")
@@ -225,7 +225,7 @@ async def create_visit_type(impl_id: str, body: VisitTypeCreate, user: Backoffic
         logger.info("visit_type_created", implementation=impl_id, slug=body.slug)
         return {"success": True, "data": result.data[0], "error": None}
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail="Invalid request")
 
 
 @router.put("/visit-types/{vt_id}")
@@ -256,7 +256,7 @@ async def update_visit_type(vt_id: str, body: VisitTypeUpdate, user: BackofficeU
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail="Invalid request")
 
 
 @router.delete("/visit-types/{vt_id}")
@@ -317,7 +317,7 @@ async def assign_user(impl_id: str, body: UserAssign, user: BackofficeUser = Dep
         logger.info("user_assigned", phone=body.phone, implementation=impl_id)
         return {"success": True, "data": result.data[0], "error": None}
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail="Invalid request")
 
 
 class SwitchUserImplRequest(BaseModel):
@@ -634,7 +634,7 @@ async def test_vision_prompt(request: Request, body: TestVisionRequest, user: Ba
 
     except Exception as e:
         logger.error("test_vision_failed", error=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal error")
 
 
 class BulkImportRequest(BaseModel):
@@ -748,7 +748,7 @@ async def trigger_pipeline(request: Request, session_id: str, user: BackofficeUs
 
     except Exception as e:
         logger.error("trigger_pipeline_failed", session_id=session_id, error=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal error")
 
 
 @router.post("/test-extraction")
@@ -760,12 +760,11 @@ async def test_extraction(request: Request, body: TestExtractionRequest, user: B
 
         system_prompt = build_system_prompt(body.schema_json)
 
-        import anthropic
-        from src.config.settings import settings
+        from anthropic import AsyncAnthropic
 
-        client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+        client = AsyncAnthropic(api_key=settings.anthropic_api_key, timeout=60.0)
 
-        response = client.messages.create(
+        response = await client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=2000,
             system=system_prompt,
@@ -788,7 +787,7 @@ async def test_extraction(request: Request, body: TestExtractionRequest, user: B
 
     except Exception as e:
         logger.error("test_extraction_failed", error=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal error")
 
 
 class GenerateReportRequest(BaseModel):
@@ -939,7 +938,7 @@ async def generate_report_endpoint(request: Request, body: GenerateReportRequest
         raise
     except Exception as e:
         logger.error("generate_report_failed", session_id=body.session_id, error=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal error")
 
 
 async def _save_report(
@@ -1085,7 +1084,7 @@ async def consolidate_analysis(request: Request, body: ConsolidateRequest, user:
         raise
     except Exception as e:
         logger.error("consolidate_analysis_failed", error=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal error")
 
 
 # ── User Groups ─────────────────────────────────────────────────────
@@ -1307,7 +1306,7 @@ async def generate_group_report_endpoint(request: Request, body: GroupReportRequ
         raise
     except Exception as e:
         logger.error("generate_group_report_failed", error=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal error")
 
 
 class ProjectReportRequest(BaseModel):
@@ -1433,7 +1432,7 @@ async def generate_project_report_endpoint(request: Request, body: ProjectReport
         raise
     except Exception as e:
         logger.error("generate_project_report_failed", error=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal error")
 
 
 # ── Report Persistence & Export ──────────────────────────────────────
@@ -1468,7 +1467,7 @@ async def list_reports(
         return {"success": True, "data": result.data or [], "error": None}
     except Exception as e:
         logger.error("list_reports_failed", error=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal error")
 
 
 @router.get("/reports/{report_id}")
@@ -1558,7 +1557,7 @@ async def export_gamma(request: Request, body: ExportGammaRequest, user: Backoff
         raise
     except Exception as e:
         logger.error("export_gamma_failed", error=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal error")
 
 
 def _build_gamma_content(markdown: str, title: str) -> str:
@@ -1692,7 +1691,7 @@ async def export_sheets(request: Request, body: ExportSheetsRequest, user: Backo
         raise
     except Exception as e:
         logger.error("export_sheets_failed", error=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal error")
 
 
 def _build_facts_sheet(facts_rows: list[dict]) -> list[list[str]]:
@@ -1908,7 +1907,7 @@ async def get_compliance(
         }
     except Exception as e:
         logger.error("get_compliance_failed", error=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal error")
 
 
 # ── Backoffice User Management ─────────────────────────────────────
@@ -1945,17 +1944,28 @@ async def create_backoffice_user_endpoint(body: BackofficeUserCreate, user: Back
         return {"success": True, "data": user, "error": None}
     except Exception as e:
         logger.error("create_backoffice_user_failed", error=str(e))
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="Internal error")
+
+
+class BackofficeUserUpdate(BaseModel):
+    role: str | None = None
+    name: str | None = None
+    allowed_implementations: list[str] | None = None
+    permissions: dict[str, bool] | None = None
+    is_active: bool | None = None
 
 
 @router.put("/backoffice-users/{user_id}")
-async def update_backoffice_user_endpoint(user_id: str, body: dict[str, Any], user: BackofficeUser = Depends(require_superadmin())) -> dict:
+async def update_backoffice_user_endpoint(user_id: str, body: BackofficeUserUpdate, user: BackofficeUser = Depends(require_superadmin())) -> dict:
     """Update a backoffice user's role, permissions, or allowed implementations."""
     client = get_client()
-    allowed_fields = {"role", "name", "allowed_implementations", "permissions", "is_active"}
-    updates = {k: v for k, v in body.items() if k in allowed_fields}
+    updates = {k: v for k, v in body.model_dump(exclude_none=True).items()}
     if not updates:
         raise HTTPException(status_code=400, detail="No valid fields to update")
+
+    # Validate role value
+    if body.role and body.role not in ("superadmin", "admin", "analyst", "viewer"):
+        raise HTTPException(status_code=400, detail="Invalid role")
 
     client.table("backoffice_users").update(updates).eq("id", user_id).execute()
     result = client.table("backoffice_users").select("*").eq("id", user_id).maybe_single().execute()
