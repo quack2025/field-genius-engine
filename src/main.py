@@ -133,10 +133,13 @@ if _is_dev:
     app.include_router(simulate_router)
 
 
-@app.on_event("startup")
-async def startup() -> None:
-    """Initialize thread pool + Redis connection pool on startup."""
-    # Increase thread pool for async-wrapped sync calls (Supabase, etc.)
+from contextlib import asynccontextmanager
+
+
+@asynccontextmanager
+async def lifespan(app_instance: FastAPI):
+    """Startup + shutdown lifecycle (replaces deprecated on_event)."""
+    # ── Startup ──
     import asyncio
     import concurrent.futures
     loop = asyncio.get_event_loop()
@@ -155,10 +158,9 @@ async def startup() -> None:
             import structlog
             structlog.get_logger().warning("redis_startup_failed_continuing_without", error=str(e))
 
+    yield  # App runs here
 
-@app.on_event("shutdown")
-async def shutdown() -> None:
-    """Graceful shutdown: close Redis pool."""
+    # ── Shutdown ──
     try:
         from src.engine.worker import _pool
         if _pool:
@@ -167,6 +169,10 @@ async def shutdown() -> None:
             structlog.get_logger().info("redis_pool_closed")
     except Exception:
         pass
+
+
+# Attach lifespan to app
+app.router.lifespan_context = lifespan
 
 
 @app.get("/health")
