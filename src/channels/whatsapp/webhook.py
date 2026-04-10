@@ -93,15 +93,18 @@ async def twilio_webhook(request: Request) -> Response:
         twiml = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
         return Response(content=twiml, media_type="application/xml")
 
-    # Validate Twilio signature — use hardcoded URL to prevent header spoofing
+    # Validate Twilio signature — hardcoded URL required in production
     signature = request.headers.get("X-Twilio-Signature", "")
     if settings.webhook_public_url:
         request_url = f"{settings.webhook_public_url}{request.url.path}"
-    else:
-        # Fallback to headers if webhook_public_url not configured
+    elif settings.environment.lower() in ("development", "dev", "local"):
+        # Header fallback ONLY in development (spoofable in production)
         proto = request.headers.get("X-Forwarded-Proto", request.url.scheme)
         host = request.headers.get("Host", request.url.netloc)
         request_url = f"{proto}://{host}{request.url.path}"
+    else:
+        logger.error("webhook_public_url_missing_in_production")
+        return Response(content="Server misconfigured", status_code=500)
     if not validate_twilio_signature(request_url, params, signature):
         logger.warning("twilio_signature_invalid")
         return Response(content="Forbidden", status_code=403)

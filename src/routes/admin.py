@@ -572,28 +572,37 @@ async def reload_config(impl_id: str | None = None, user: BackofficeUser = Depen
 async def test_vision_prompt(request: Request, body: TestVisionRequest, user: BackofficeUser = Depends(require_permission("can_edit_prompts"))) -> dict:
     """Test a vision prompt against an image URL. Returns the AI description."""
     try:
-        import anthropic
-        from src.config.settings import settings
+        from anthropic import AsyncAnthropic
 
-        client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+        client = AsyncAnthropic(api_key=settings.anthropic_api_key, timeout=60.0)
 
         # SSRF protection: only allow HTTPS from public hosts
         parsed_url = urlparse(body.image_url)
         if parsed_url.scheme != "https":
             raise HTTPException(status_code=400, detail="Only HTTPS URLs allowed")
-        if parsed_url.hostname in ("localhost", "127.0.0.1", "0.0.0.0", "metadata.google.internal"):
+        blocked_hosts = {"localhost", "127.0.0.1", "0.0.0.0", "metadata.google.internal", "169.254.169.254"}
+        if parsed_url.hostname in blocked_hosts:
             raise HTTPException(status_code=400, detail="Internal URLs not allowed")
         try:
             ip = ipaddress.ip_address(parsed_url.hostname or "")
-            if ip.is_private or ip.is_loopback or ip.is_link_local:
+            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
                 raise HTTPException(status_code=400, detail="Private/internal URLs not allowed")
         except ValueError:
-            pass  # hostname is a domain name, not IP — that's fine
+            # hostname is a domain — resolve and check IP
+            import socket
+            try:
+                resolved = socket.getaddrinfo(parsed_url.hostname, 443)
+                for _, _, _, _, sockaddr in resolved:
+                    resolved_ip = ipaddress.ip_address(sockaddr[0])
+                    if resolved_ip.is_private or resolved_ip.is_loopback or resolved_ip.is_link_local or resolved_ip.is_reserved:
+                        raise HTTPException(status_code=400, detail="URL resolves to internal address")
+            except socket.gaierror:
+                raise HTTPException(status_code=400, detail="Cannot resolve hostname")
 
-        # Fetch image bytes
+        # Fetch image bytes — no redirects to prevent SSRF via redirect
         import httpx
         async with httpx.AsyncClient(timeout=30) as http:
-            resp = await http.get(body.image_url)
+            resp = await http.get(body.image_url, follow_redirects=False)
             resp.raise_for_status()
             image_bytes = resp.content
             media_type = resp.headers.get("content-type", "image/jpeg")
@@ -601,7 +610,7 @@ async def test_vision_prompt(request: Request, body: TestVisionRequest, user: Ba
         import base64
         b64 = base64.b64encode(image_bytes).decode()
 
-        response = client.messages.create(
+        response = await client.messages.create(
             model="claude-sonnet-4-20250514",
             max_tokens=1500,
             system=body.vision_prompt,

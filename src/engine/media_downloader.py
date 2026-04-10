@@ -38,6 +38,33 @@ MIME_TO_TYPE: dict[str, str] = {
     "video/3gpp": "video",
 }
 
+# Magic bytes for file type validation
+MAGIC_BYTES: dict[str, list[tuple[bytes, int]]] = {
+    "image/jpeg": [(b"\xff\xd8\xff", 0)],
+    "image/png": [(b"\x89PNG\r\n\x1a\n", 0)],
+    "image/webp": [(b"RIFF", 0), (b"WEBP", 8)],
+    "audio/ogg": [(b"OggS", 0)],
+    "audio/mpeg": [(b"\xff\xfb", 0), (b"\xff\xf3", 0), (b"\xff\xf2", 0), (b"ID3", 0)],
+    "audio/mp4": [(b"ftyp", 4)],
+    "video/mp4": [(b"ftyp", 4)],
+    "video/3gpp": [(b"ftyp", 4)],
+}
+
+MAX_FILE_SIZE = 16 * 1024 * 1024  # 16MB (WhatsApp videos can be large)
+
+
+def _validate_magic_bytes(file_bytes: bytes, claimed_type: str) -> bool:
+    """Validate file content matches claimed MIME type via magic bytes."""
+    checks = MAGIC_BYTES.get(claimed_type)
+    if not checks:
+        return False  # Unknown type — reject
+
+    for magic, offset in checks:
+        if len(file_bytes) > offset + len(magic):
+            if file_bytes[offset:offset + len(magic)] == magic:
+                return True
+    return False
+
 
 async def download_and_store(
     media_url: str,
@@ -49,8 +76,12 @@ async def download_and_store(
 
     Returns file metadata dict to store in session.raw_files.
     """
-    ext = MIME_TO_EXT.get(content_type, ".bin")
-    media_type = MIME_TO_TYPE.get(content_type, "unknown")
+    # Reject unknown content types early
+    if content_type not in MIME_TO_EXT:
+        raise ValueError(f"Unsupported content type: {content_type}")
+
+    ext = MIME_TO_EXT[content_type]
+    media_type = MIME_TO_TYPE[content_type]
     file_id = str(uuid.uuid4())[:8]
     filename = f"{file_id}{ext}"
     storage_path = f"{session_id}/{filename}"
@@ -69,24 +100,42 @@ async def download_and_store(
         raise ValueError(f'Media URL not from allowed Twilio domain: {media_url[:60]}')
 
     try:
-        # Download from Twilio (requires basic auth)
+        # Download from Twilio — disable redirects to prevent SSRF via redirect
         async with httpx.AsyncClient() as http:
             response = await http.get(
                 media_url,
                 auth=(settings.twilio_account_sid, settings.twilio_auth_token),
-                follow_redirects=True,
+                follow_redirects=False,
                 timeout=30.0,
             )
+
+            # Handle Twilio redirects manually — only follow to allowed hosts
+            if response.status_code in (301, 302, 303, 307, 308):
+                redirect_url = response.headers.get("location", "")
+                redirect_parsed = urlparse(redirect_url)
+                if redirect_parsed.hostname not in allowed_hosts:
+                    raise ValueError(f"Redirect to disallowed host: {redirect_parsed.hostname}")
+                response = await http.get(
+                    redirect_url,
+                    auth=(settings.twilio_account_sid, settings.twilio_auth_token),
+                    follow_redirects=False,
+                    timeout=30.0,
+                )
+
             response.raise_for_status()
             file_bytes = response.content
 
-        # Enforce file size limit (5MB)
-        MAX_FILE_SIZE = 5 * 1024 * 1024  # 5MB
+        # Enforce file size limit
         if len(file_bytes) > MAX_FILE_SIZE:
-            logger.warning("media_too_large", size=len(file_bytes), max=MAX_FILE_SIZE, storage_path=storage_path)
+            logger.warning("media_too_large", size=len(file_bytes), max=MAX_FILE_SIZE)
             raise ValueError(f"File too large: {len(file_bytes)} bytes (max {MAX_FILE_SIZE})")
 
-        # Upload to Supabase Storage (async via thread — avoid blocking event loop)
+        # Validate magic bytes match claimed content type
+        if not _validate_magic_bytes(file_bytes, content_type):
+            logger.warning("media_magic_bytes_mismatch", claimed=content_type, size=len(file_bytes))
+            raise ValueError(f"File content does not match claimed type {content_type}")
+
+        # Upload to Supabase Storage (async via thread)
         client = get_client()
         await _run(lambda: client.storage.from_("media").upload(
             path=storage_path,
@@ -117,8 +166,20 @@ async def store_bytes(
     filename: str | None = None,
 ) -> dict[str, Any]:
     """Store raw bytes directly to Supabase Storage (used by /api/simulate)."""
-    ext = MIME_TO_EXT.get(content_type, ".bin")
-    media_type = MIME_TO_TYPE.get(content_type, "unknown")
+    # Validate content type
+    if content_type not in MIME_TO_EXT:
+        raise ValueError(f"Unsupported content type: {content_type}")
+
+    # Validate magic bytes
+    if not _validate_magic_bytes(file_bytes, content_type):
+        raise ValueError(f"File content does not match claimed type {content_type}")
+
+    # Enforce size limit
+    if len(file_bytes) > MAX_FILE_SIZE:
+        raise ValueError(f"File too large: {len(file_bytes)} bytes (max {MAX_FILE_SIZE})")
+
+    ext = MIME_TO_EXT[content_type]
+    media_type = MIME_TO_TYPE[content_type]
 
     if filename is None:
         file_id = str(uuid.uuid4())[:8]
