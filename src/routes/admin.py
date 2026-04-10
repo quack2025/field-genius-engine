@@ -68,6 +68,11 @@ class ImplementationUpdate(BaseModel):
     google_spreadsheet_id: str | None = None
     trigger_words: list[str] | None = None
     status: str | None = None
+    whatsapp_number: str | None = None
+    access_mode: str | None = None
+    vision_strategy: str | None = None
+    onboarding_config: dict[str, Any] | None = None
+    folder: str | None = None
 
 
 class VisitTypeCreate(BaseModel):
@@ -166,7 +171,14 @@ async def update_implementation(impl_id: str, body: ImplementationUpdate, user: 
     if not user.has_impl_access(impl_id):
         raise HTTPException(status_code=403, detail="Access denied")
     client = get_client()
-    updates = {k: v for k, v in body.model_dump().items() if v is not None}
+    # Allow explicit null for nullable fields (e.g., removing from folder)
+    nullable_fields = {"folder", "whatsapp_number", "google_spreadsheet_id"}
+    updates = {}
+    for k, v in body.model_dump().items():
+        if v is not None:
+            updates[k] = v
+        elif k in nullable_fields and k in body.model_fields_set:
+            updates[k] = None
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")
 
