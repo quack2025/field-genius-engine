@@ -155,7 +155,10 @@ async def twilio_webhook(request: Request) -> Response:
                         "No tienes acceso a este servicio. Contacta a tu administrador.",
                     )
                     logger.warning("webhook_access_denied", phone=phone, impl=resolved_impl)
-                    await send_message(from_phone, rejection)
+                    # Send rejection from the implementation's number
+                    from_num = impl_config.whatsapp_number or settings.twilio_whatsapp_number
+                    sid = await send_message(from_phone, rejection, from_number=from_num)
+                    logger.info("rejection_message_result", sid=sid, from_num=from_num, to=from_phone)
                     twiml = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
                     return Response(content=twiml, media_type="application/xml")
 
