@@ -133,25 +133,69 @@ async def twilio_webhook(request: Request) -> Response:
         resolved_impl=resolved_impl,
     )
 
-    # ── Access control: whitelist check ──
+    # ── Access control + Onboarding flow ──
+    impl_config = None
+    user = None
     if resolved_impl:
         try:
             from src.engine.config_loader import get_implementation
+            from src.engine.supabase_client import get_user_by_phone
             impl_config = await get_implementation(resolved_impl)
+            user = await get_user_by_phone(phone)
+            onboarding = impl_config.onboarding_config
+
+            # Step 1: Whitelist check — reject unknown users
             if impl_config.access_mode == "whitelist":
-                from src.engine.supabase_client import get_user_by_phone
-                user = await get_user_by_phone(phone)
                 if not user or user.get("implementation") != resolved_impl:
-                    logger.warning("webhook_access_denied", phone=phone, impl=resolved_impl)
-                    await send_message(
-                        from_phone,
-                        "No tienes acceso a este servicio. Contacta a tu administrador para ser registrado.",
+                    rejection = onboarding.get(
+                        "rejection_message",
+                        "No tienes acceso a este servicio. Contacta a tu administrador.",
                     )
+                    logger.warning("webhook_access_denied", phone=phone, impl=resolved_impl)
+                    await send_message(from_phone, rejection)
                     twiml = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
                     return Response(content=twiml, media_type="application/xml")
+
+            # Step 2: Terms acceptance check
+            if user and onboarding.get("require_terms", False) and not user.get("accepted_terms"):
+                body_lower = body.strip().lower()
+
+                if body_lower in ("acepto", "accept", "si", "sí", "ok"):
+                    # Accept terms
+                    from src.engine.supabase_client import _run, get_client
+                    import datetime
+                    await _run(lambda: get_client().table("users").update({
+                        "accepted_terms": True,
+                        "onboarded_at": datetime.datetime.now(datetime.UTC).isoformat(),
+                    }).eq("phone", phone).execute())
+                    accepted_msg = onboarding.get(
+                        "terms_accepted_message",
+                        "Perfecto! Ya puedes empezar. Envía tus fotos y audios.",
+                    )
+                    await send_message(from_phone, accepted_msg)
+                    logger.info("user_accepted_terms", phone=phone, impl=resolved_impl)
+                    twiml = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
+                    return Response(content=twiml, media_type="application/xml")
+                else:
+                    # Send welcome + T&C message
+                    welcome = onboarding.get(
+                        "welcome_message",
+                        "Bienvenido a Field Genius! Para continuar, responde *acepto*.",
+                    )
+                    await send_message(from_phone, welcome)
+                    logger.info("user_onboarding_sent", phone=phone, impl=resolved_impl)
+                    twiml = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
+                    return Response(content=twiml, media_type="application/xml")
+
+            # Step 3: First contact for open-mode users (no terms, just welcome)
+            if not user and impl_config.access_mode == "open":
+                welcome = onboarding.get("welcome_message")
+                if welcome:
+                    # Will show welcome once — user gets created by get_or_create_session below
+                    await send_message(from_phone, welcome)
+
         except Exception as e:
             logger.error("access_check_failed", phone=phone, error=str(e))
-            # On error, allow through (don't block the pipeline)
 
     # Process location sharing (Twilio sends Latitude/Longitude params)
     latitude = params.get("Latitude")
@@ -213,7 +257,9 @@ async def twilio_webhook(request: Request) -> Response:
 
             # QW4: Acknowledge receipt with file count
             file_count = len(session.get("raw_files", [])) + 1
-            await send_message(from_phone, f"Recibido ({file_count} archivo(s) hoy)")
+            # Use configurable hint message
+            hint_template = (impl_config.onboarding_config.get("first_photo_hint") if impl_config else None) or "Recibido ({count} archivo(s) hoy). Escribe *reporte* cuando termines."
+            await send_message(from_phone, hint_template.replace("{count}", str(file_count)))
 
             # Pre-process in background via queue (or inline fallback)
             impl_id = session.get("implementation", settings.default_implementation)
