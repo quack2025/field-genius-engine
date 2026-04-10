@@ -196,6 +196,36 @@ async def update_file_in_session(
     await _run(_sync)
 
 
+async def get_session_files(session_id: str) -> list[dict[str, Any]]:
+    """Get files for a session — reads from session_files table, falls back to raw_files JSONB."""
+    def _sync():
+        client = get_client()
+        # Try normalized table first
+        result = (
+            client.table("session_files")
+            .select("*")
+            .eq("session_id", session_id)
+            .order("created_at")
+            .execute()
+        )
+        if result.data:
+            return result.data
+        # Fallback to JSONB
+        session = client.table("sessions").select("raw_files").eq("id", session_id).maybe_single().execute()
+        return (session.data or {}).get("raw_files") or []
+
+    try:
+        return await _run(_sync)
+    except Exception as e:
+        logger.warning("get_session_files_failed_using_jsonb", session_id=session_id, error=str(e))
+        # Last resort fallback
+        def _fallback():
+            client = get_client()
+            session = client.table("sessions").select("raw_files").eq("id", session_id).maybe_single().execute()
+            return (session.data or {}).get("raw_files") or []
+        return await _run(_fallback)
+
+
 async def get_session(session_id: str) -> dict[str, Any] | None:
     """Get a session by ID."""
     logger.info("get_session", session_id=session_id)

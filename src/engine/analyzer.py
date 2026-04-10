@@ -29,13 +29,17 @@ def get_anthropic_client() -> AsyncAnthropic:
     return _anthropic_client
 
 
-def _build_observations_context(session: dict[str, Any]) -> str:
+def _build_observations_context(session: dict[str, Any], files: list[dict[str, Any]] | None = None) -> str:
     """Build consolidated context from all media in a session.
 
     Merges pre-processed transcriptions, image descriptions, text notes,
-    and location data from raw_files into a single text block.
+    and location data into a single text block.
+
+    Args:
+        session: Session dict (used for raw_files fallback)
+        files: Explicit file list from session_files table (preferred)
     """
-    raw_files: list[dict[str, Any]] = session.get("raw_files", [])
+    raw_files: list[dict[str, Any]] = files if files is not None else session.get("raw_files", [])
     parts: list[str] = []
 
     for f in sorted(raw_files, key=lambda x: x.get("timestamp", "")):
@@ -93,14 +97,16 @@ async def generate_report(
     framework_config: dict[str, Any],
     implementation_name: str = "",
     country_context: dict[str, Any] | None = None,
+    files: list[dict[str, Any]] | None = None,
 ) -> str | None:
     """Generate a report for a session using a specific framework type.
 
     Args:
-        session: Full session dict with raw_files (including pre-processed descriptions)
+        session: Full session dict
         report_type: 'tactical' | 'strategic' | 'innovation'
         framework_config: The specific framework dict (from analysis_framework.frameworks[type])
         implementation_name: Client name for context
+        files: Explicit file list from session_files table (preferred over raw_files JSONB)
 
     Returns:
         Markdown report string, or None on failure.
@@ -124,7 +130,7 @@ async def generate_report(
     )
 
     # Build observation context from all media
-    observations_text = _build_observations_context(session)
+    observations_text = _build_observations_context(session, files=files)
 
     if not observations_text.strip():
         logger.warning("report_no_observations", session_id=session.get("id"))
@@ -224,6 +230,7 @@ async def generate_all_reports(
     frameworks: dict[str, Any],
     implementation_name: str = "",
     country_context: dict[str, Any] | None = None,
+    files: list[dict[str, Any]] | None = None,
 ) -> dict[str, str | None]:
     """Generate all configured report types for a session.
 
@@ -231,6 +238,7 @@ async def generate_all_reports(
         session: Full session dict
         frameworks: The frameworks dict (analysis_framework.frameworks)
         implementation_name: Client name
+        files: Explicit file list from session_files table (preferred)
 
     Returns:
         Dict mapping report_type → markdown (or None if failed)
@@ -247,6 +255,7 @@ async def generate_all_reports(
             framework_config=config,
             implementation_name=implementation_name,
             country_context=country_context,
+            files=files,
         )
 
     # Run all in parallel

@@ -864,6 +864,10 @@ async def generate_report_endpoint(request: Request, body: GenerateReportRequest
             raise HTTPException(status_code=400, detail="No frameworks configured in analysis_framework")
 
         from src.engine.analyzer import generate_report, generate_all_reports, extract_facts, _build_observations_context
+        from src.engine.supabase_client import get_session_files
+
+        # Load files from normalized table (falls back to raw_files JSONB)
+        session_files = await get_session_files(body.session_id)
 
         # Resolve country context from session or user
         user_country = session.get("country", "")
@@ -873,10 +877,10 @@ async def generate_report_endpoint(request: Request, body: GenerateReportRequest
         cc = impl_config.get_country_context(user_country)
 
         if body.report_type == "all":
-            results = await generate_all_reports(session, frameworks, impl_config.name, country_context=cc)
+            results = await generate_all_reports(session, frameworks, impl_config.name, country_context=cc, files=session_files)
             # Save each to DB + extract facts for aggregation
             saved = {}
-            obs_text = _build_observations_context(session)
+            obs_text = _build_observations_context(session, files=session_files)
             for rtype, markdown in results.items():
                 if markdown:
                     saved[rtype] = await _save_report(client, body.session_id, impl_id, rtype, markdown)
