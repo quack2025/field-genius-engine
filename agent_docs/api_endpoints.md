@@ -1,120 +1,188 @@
-# API Endpoints
+# API Endpoints — Radar Xponencial Engine
 
 Base URL (production): `https://zealous-endurance-production-f9b2.up.railway.app`
+
+All `/api/admin/*` endpoints are also available at `/v1/api/admin/*`. The unversioned routes include `Deprecation: true` + `Sunset: 2026-10-01` headers.
+
+## Authentication
+
+All `/api/admin/*` endpoints require JWT from Supabase Auth in `Authorization: Bearer <token>` header.
+
+Permission model (`backoffice_users.role`):
+- `superadmin` — full access, bypasses implementation checks
+- `admin` — manage users, generate reports, edit implementations
+- `analyst` — read-only + generate reports
+- `viewer` — read-only
 
 ## Health & Debug
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/health` | Health check |
-| GET | `/api/test-db` | Query first user from DB (no auth) |
+| GET | `/health` | Basic health check (always returns 200) |
+| GET | `/health/deep` | Verifies Redis, Supabase, Anthropic key format, OpenAI key format |
 
 ## WhatsApp Webhook
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/webhook/whatsapp` | Twilio webhook (form-encoded) |
-| GET | `/webhook/whatsapp` | Twilio verification challenge |
-
-## Simulate (Testing)
-
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/api/simulate` | Simulate WhatsApp message (form: phone, body, file) |
-| GET | `/api/sessions/{phone}` | Get today's session for phone |
+| POST | `/webhook/whatsapp` | Twilio webhook (form-encoded). Dedup via MessageSid (5min TTL). Pipeline runs in background. |
 
 ## Admin API (`/api/admin/*`)
 
-**NOTE:** Currently unauthenticated — auth via JWT + backoffice_users is pending.
-
-### Implementations
+### Implementations (Proyectos)
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/admin/implementations` | List all |
-| POST | `/api/admin/implementations` | Create new |
-| GET | `/api/admin/implementations/:id` | Get by ID |
-| PUT | `/api/admin/implementations/:id` | Update fields |
-| DELETE | `/api/admin/implementations/:id` | Soft delete (status→inactive) |
+| GET | `/implementations` | List (paginated: limit, offset) |
+| POST | `/implementations` | Create new |
+| GET | `/implementations/:id` | Get by ID |
+| PUT | `/implementations/:id` | Update — supports all editable fields including `folder`, `whatsapp_number`, `access_mode`, `vision_strategy`, `onboarding_config` |
+| DELETE | `/implementations/:id` | Soft delete (status→inactive) |
 
 ### Visit Types
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/admin/implementations/:id/visit-types` | List for implementation |
-| POST | `/api/admin/implementations/:id/visit-types` | Create new |
-| PUT | `/api/admin/visit-types/:vtId` | Update |
-| DELETE | `/api/admin/visit-types/:vtId` | Soft delete (is_active→false) |
+| GET | `/implementations/:id/visit-types` | List for implementation |
+| POST | `/implementations/:id/visit-types` | Create |
+| PUT | `/visit-types/:vtId` | Update |
+| DELETE | `/visit-types/:vtId` | Soft delete |
 
-### Users
+### Users (Field Agents)
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/admin/implementations/:id/users` | List users |
-| POST | `/api/admin/implementations/:id/users` | Assign user (upsert) |
-| DELETE | `/api/admin/implementations/:id/users/:phone` | Remove user |
+| GET | `/implementations/:id/users` | List (paginated) |
+| POST | `/implementations/:id/users` | Upsert user |
+| DELETE | `/implementations/:id/users/:phone` | Remove user |
+| POST | `/implementations/:id/bulk-import-users` | CSV bulk import |
 
 ### Sessions (read-only)
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/admin/sessions` | List with filters (impl, phone, status, date_from, date_to, limit, offset) |
-| GET | `/api/admin/sessions/:id` | Full detail with signed media URLs + visit reports |
+| GET | `/sessions` | List with filters + pagination |
+| GET | `/sessions/:id` | Full detail with signed media URLs |
 
 ### Stats & Config
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/admin/stats?impl=X&days=7` | Session/report counts and breakdowns |
-| POST | `/api/admin/reload-config?impl_id=X` | Clear config cache |
+| GET | `/stats?impl=X&days=7` | Session/report counts and breakdowns |
+| POST | `/reload-config?impl_id=X` | Clear config cache (auto-invalidates after 5min) |
+| GET | `/usage` | Monthly usage + queue stats |
 
 ### User Groups
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/admin/user-groups?impl=X` | List groups (optional impl filter) |
-| POST | `/api/admin/implementations/:id/user-groups` | Create group { name, slug, zone?, tags? } |
-| POST | `/api/admin/user-groups/:groupId/members` | Add member { phone } |
-| DELETE | `/api/admin/user-groups/:groupId/members/:phone` | Remove member |
+| GET | `/user-groups?impl=X` | List (paginated) |
+| POST | `/implementations/:id/user-groups` | Create group |
+| POST | `/user-groups/:groupId/members` | Add member |
+| DELETE | `/user-groups/:groupId/members/:phone` | Remove member |
 
-### Report Generation
+### Report Generation & Persistence
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/api/admin/generate-report` | Generate report for 1 session { session_id, report_type } |
-| POST | `/api/admin/generate-group-report` | Generate group-level report { group_id, framework, date_from?, date_to? } |
-| POST | `/api/admin/generate-project-report` | Generate project-wide report { implementation_id, framework, date_from?, date_to? } |
-| POST | `/api/admin/trigger-pipeline/:sessionId` | Manually trigger old pipeline (legacy) |
-| POST | `/api/admin/consolidate-analysis` | Consolidate per-visit analyses (legacy) |
+| POST | `/generate-report` | Generate report for session (rate limited 20/min) |
+| POST | `/generate-group-report` | Group-level report |
+| POST | `/generate-project-report` | Project-wide report |
+| GET | `/reports` | List saved reports (paginated, filter by session_id/impl/framework) |
+| GET | `/reports/:id` | Get saved report |
 
-`report_type` / `framework` values depend on the implementation's `analysis_framework` config:
-- **laundry_care**: `tactical`, `strategic`, `innovation`
-- **telecable**: `competidor`, `cliente`, `comunicacion`
-- Use `"all"` as report_type to generate all frameworks in parallel.
+### Export
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/export-gamma` | Export report markdown to Gamma (API or clipboard content) |
+| POST | `/export-sheets` | Export facts + compliance to Google Sheets tabs |
+
+### Compliance
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/compliance?implementation_id=X&date_from&date_to` | User activity + summary stats |
+
+### Digest (Cron)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/send-digest?implementation_id=X` | Send digest email (omit impl to send for all) |
+| POST | `/test-digest` | Send test digest to specific email (superadmin only) |
+
+### Backoffice Users
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/backoffice-users` | List (paginated, superadmin only) |
+| POST | `/backoffice-users` | Create (superadmin only) |
+| PUT | `/backoffice-users/:id` | Update role/permissions (typed `BackofficeUserUpdate` model) |
+| GET | `/my-profile` | Current user's profile |
+
+### Failed Jobs (Dead Letter Queue)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/failed-jobs` | List failed jobs (paginated, status filter, superadmin only) |
+| POST | `/failed-jobs/:id/retry` | Re-enqueue to arq worker |
+| POST | `/failed-jobs/:id/resolve` | Mark as manually resolved |
+
+### Retention
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/run-retention?dry_run=true` | Delete media older than 90 days (superadmin) |
 
 ### Testing (Prompt Engineering)
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/api/admin/test-vision-prompt` | Test vision prompt against image URL (uses Sonnet) |
-| POST | `/api/admin/test-extraction` | Test extraction schema against text (uses Haiku) |
+| POST | `/test-vision-prompt` | Test vision prompt against image URL (AsyncAnthropic + SSRF hardened) |
+| POST | `/test-extraction` | Test extraction schema against text (AsyncAnthropic) |
 
 ## CORS
 
-Allowed origins:
-- `http://localhost:5173`
-- `http://localhost:3000`
-- `https://field-genius-backoffice.vercel.app`
-- `https://xponencial.net`
-- `https://www.xponencial.net`
+Allowed origins (from `CORS_ORIGINS` env var):
+- `http://localhost:5173`, `http://localhost:3000`
+- `https://app.xponencial.net` (primary)
+- `https://field-genius-backoffice.vercel.app` (fallback)
+- `https://xponencial.net`, `https://www.xponencial.net`
+
+## Rate Limits
+
+All admin endpoints share a single `Limiter` instance (fixed in Sprint E-4):
+- Global default: 120/min per IP
+- AI-invoking endpoints: 5-20/min (`@limiter.limit("X/minute")`)
 
 ## Response Format
 
-All endpoints return:
+Success:
 ```json
 {
   "success": true,
   "data": <T>,
+  "pagination": { "total": 100, "limit": 50, "offset": 0, "has_more": true },
   "error": null
 }
 ```
+
+Error (standardized, no `str(e)` leaks):
+```json
+{
+  "error": {
+    "code": "internal_error",
+    "message": "Internal error",
+    "request_id": "uuid"
+  }
+}
+```
+
+## Security notes
+
+- `Deprecation: true` + `Sunset: 2026-10-01` headers on `/api/admin/*` (use `/v1/api/admin/*` going forward)
+- PII auto-masking in all logs (structlog processor: `phone` → `+57***4567`)
+- Magic byte validation on file uploads (rejects content/type mismatch)
+- SSRF: DNS resolution check + no redirects on `test-vision-prompt`
+- Webhook signature: header fallback only in development mode
+- `ENVIRONMENT=production` disables OpenAPI docs + enforces auth

@@ -1,14 +1,18 @@
-# Field Genius Engine — Multimodal Capture → AI → Structured Reports
+# Radar Xponencial Engine — Multimodal Capture → AI → Structured Reports
 
+> **Product name:** Radar Xponencial (historic repo name: field-genius-engine)
 > **Repo:** `quack2025/field-genius-engine`
-> **Deploy:** Railway — `https://field-genius-engine.up.railway.app`
-> **Estado:** En construcción. Primera implementación: Argos (visitas de campo).
+> **Deploy:** Railway — `https://zealous-endurance-production-f9b2.up.railway.app`
+> **Estado:** Production. Active implementations: laundry_care (demo, CPG), telecable (enterprise pilot, telecom)
+> **Audit score:** ~9.6/10 (post-remediation, Apr 2026)
 
 ---
 
 ## Qué es este proyecto
 
-**Field Genius Engine** es un motor reutilizable que convierte capturas no estructuradas (fotos, audio, video, texto) enviadas por WhatsApp en reportes estructurados. El motor es agnóstico al caso de uso — cada implementación define su propio schema de extracción.
+**Radar Xponencial** es un motor reutilizable que convierte capturas no estructuradas (fotos, audio, video, texto) enviadas por WhatsApp en reportes estructurados. El motor es agnóstico al caso de uso — cada implementación (proyecto) define su propio schema de extracción, número de WhatsApp, control de acceso, y mensajes de onboarding.
+
+Nota histórica: el producto originalmente se llamó "Field Genius". Los nombres de repos e infraestructura siguen usando "field-genius" por compatibilidad, pero el producto y la UI dicen "Radar Xponencial".
 
 ### El modelo mental correcto
 
@@ -428,13 +432,16 @@ El Critic es especialmente importante en:
 
 ---
 
-## Implementaciones disponibles
+## Proyectos (Implementations)
 
-| Implementación | Cliente | Tipos de visita | Estado |
-|----------------|---------|-----------------|--------|
-| `argos` | Argos (cementos) | ferreteria, obra_civil, obra_pequeña | ❌ Inactive (legacy) |
-| `laundry_care` | Cuidado de la Ropa (CPG demo) | supermarket, drugstore, TAT, hard_discount | ✅ Active (default) |
-| `telecable` | Telecable (Telecom CR) | visita_campo, atencion_cliente, instalacion | ✅ Active |
+| Proyecto | Cliente | WhatsApp | Access | Vision | Estado |
+|----------|---------|----------|--------|--------|--------|
+| `argos` | Argos (cementos) | — | — | tiered | ❌ Inactive |
+| `eficacia` | Eficacia - Impulsadoras | — | — | tiered | ❌ Inactive |
+| `laundry_care` | Cuidado de la Ropa (CPG demo) | `+14155238886` (sandbox) | open | tiered | ✅ Active |
+| `telecable` | IA \| Telecable (Telecom CR) | `+17792284312` (paid) | whitelist | tiered | ✅ Active |
+
+All projects are editable from backoffice (name, WhatsApp number, access mode, vision strategy, onboarding messages, digest config, folder assignment).
 
 ---
 
@@ -478,7 +485,7 @@ User groups, session facts, group/project reports, Reports + UserGroups pages.
 ### Enterprise Audit (Apr 5 2026) — Score: 4/10 → 7.5/10
 Four agents (Security, Backend Architect, API Architect, Performance Benchmarker) audited the codebase.
 
-### Sprints E-1 to E-6 — Enterprise Hardening (Apr 5 2026)
+### Sprints E-1 to E-6 — Enterprise Hardening P0 (Apr 5 2026)
 - **E-1**: Async Everything — all sync clients (Anthropic, OpenAI, Supabase) → async. Thread pool 100.
 - **E-2**: Webhook Hardening — MessageSid dedup, pipeline in background (not inline).
 - **E-3**: Security — removed transition auth bypass, disabled OpenAPI docs in prod, fixed Redis URL leak.
@@ -495,6 +502,24 @@ Four agents (Security, Backend Architect, API Architect, Performance Benchmarker
 ### Vision Strategy — Tiered (Apr 5 2026)
 A/B tested Sonnet vs Haiku on real pharmacy photos (Medellin). Haiku outperformed:
 1.8x more content, 1.6x more brands, 52% cheaper. Tiered is now default for all implementations.
+
+### Sprints E-7 to E-9 — P0 Security/API (Apr 6 2026) — score 9.0/10
+- **E-7**: Security — magic byte validation on uploads, PII auto-masking via structlog processor, SSRF hardening (redirects blocked + DNS check), webhook signature header fallback removed in production.
+- **E-8**: Error handling — all 17 `detail=str(e)` leaks eliminated, `BackofficeUserUpdate` Pydantic model replaces raw dict, `test-extraction` now async.
+- **E-9**: API consistency — pagination on all list endpoints (implementations, users, user-groups, reports, backoffice-users), deprecation headers on unversioned `/api/admin/*`.
+
+### Sprints E-10 to E-12 — P1 Enterprise (Apr 6 2026) — score 9.6/10
+- **E-10**: Dead letter queue — `failed_jobs` table (SQL 021), worker saves full context on failure, admin endpoints GET/retry/resolve.
+- **E-11**: Session files dual-read — `get_session_files()` helper, analyzer + report generation now read from normalized table (O(1) indexed query).
+- **E-12**: Infrastructure — migrated from deprecated `on_event` to `lifespan` context manager, migration runner script (`scripts/migrate.py`).
+
+### Sprint WhatsApp UX (Apr 6-10 2026) — Onboarding + multi-number
+- Per-client WhatsApp numbers (`whatsapp_number` column on implementations)
+- Whitelist access control (`access_mode: "open" | "whitelist"`)
+- Configurable onboarding flow: welcome message, T&C acceptance, rejection, first photo hint
+- Daily digest emails (configurable per project: enabled, emails, frequency)
+- Backoffice UI for all above (editable from ImplementationDetail config tab)
+- Rebrand: Field Genius → Radar Xponencial, Implementaciones → Proyectos, project folders
 
 ---
 
