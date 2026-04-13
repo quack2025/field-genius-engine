@@ -417,6 +417,60 @@ async def list_active_implementations() -> list[dict[str, Any]]:
     return await _run(_sync)
 
 
+async def set_pending_contact_request(phone: str) -> None:
+    """Mark a user as waiting to provide contact info (for demo CTA flow)."""
+    def _sync():
+        client = get_client()
+        client.table("users").update({
+            "pending_contact_request_at": datetime.datetime.now(datetime.UTC).isoformat(),
+        }).eq("phone", phone).execute()
+    try:
+        await _run(_sync)
+    except Exception as e:
+        logger.warning("set_pending_contact_failed", phone=phone, error=str(e))
+
+
+async def clear_pending_contact_request(phone: str) -> None:
+    """Clear the pending contact flag after lead has been captured."""
+    def _sync():
+        client = get_client()
+        client.table("users").update({
+            "pending_contact_request_at": None,
+        }).eq("phone", phone).execute()
+    try:
+        await _run(_sync)
+    except Exception as e:
+        logger.warning("clear_pending_contact_failed", phone=phone, error=str(e))
+
+
+async def save_demo_lead(
+    phone: str,
+    implementation: str | None,
+    country: str | None,
+    payload: str,
+) -> str | None:
+    """Insert a demo lead row. Returns the inserted row id or None on failure."""
+    def _sync():
+        client = get_client()
+        row = {
+            "phone": phone,
+            "implementation": implementation,
+            "country": country,
+            "payload": payload[:2000],  # Cap to keep DB sane
+            "source": "whatsapp_demo",
+            "status": "new",
+        }
+        result = client.table("demo_leads").insert(row).execute()
+        return result.data[0]["id"] if result.data else None
+    try:
+        lead_id = await _run(_sync)
+        logger.info("demo_lead_saved", phone=phone, impl=implementation, lead_id=lead_id)
+        return lead_id
+    except Exception as e:
+        logger.error("demo_lead_save_failed", phone=phone, error=str(e))
+        return None
+
+
 async def list_users(limit: int = 10) -> list[dict[str, Any]]:
     """List users (for health check / test)."""
     def _sync():

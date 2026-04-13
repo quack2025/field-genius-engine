@@ -46,6 +46,21 @@ DEMO_TRIGGER_KEYWORDS = {
     "analizar", "analiza", "fin", "terminé", "termine", "done",
 }
 
+# CTA keywords shown at the end of each demo report
+CTA_OTRO_KEYWORDS = {"otro", "otro demo", "cambiar demo", "siguiente"}
+CTA_AGENDA_KEYWORDS = {"agenda", "agendar", "llamada", "reunión", "reunion", "meeting"}
+CTA_CONTACTO_KEYWORDS = {"contacto", "contactar", "contact", "hablar", "humano"}
+
+# TTL (minutes) for a pending contact-info capture — after this, ignore stale flag
+PENDING_CONTACT_TTL_MIN = 10
+
+# Hardcoded map of which demo is "the other one" for the `otro` CTA.
+# When backoffice supports demo-mode config, this becomes dynamic.
+OTHER_DEMO_MAP = {
+    "laundry_care": "demo_telecom",
+    "demo_telecom": "laundry_care",
+}
+
 
 def _is_duplicate(message_sid: str) -> bool:
     """Check if MessageSid was already processed. Thread-safe for single process."""
@@ -571,6 +586,109 @@ async def _webhook_inner(request: Request) -> Response:
             twiml = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
             return Response(content=twiml, media_type="application/xml")
 
+        # Pending contact capture: if user previously wrote "contacto" and we're
+        # still within the TTL window, treat this text as the lead payload.
+        if user and user.get("pending_contact_request_at"):
+            try:
+                import datetime as _dt
+                pending_at_raw = user["pending_contact_request_at"]
+                pending_at = _dt.datetime.fromisoformat(pending_at_raw.replace("Z", "+00:00"))
+                age_min = (_dt.datetime.now(_dt.UTC) - pending_at).total_seconds() / 60
+            except Exception:
+                age_min = 999
+            if age_min < PENDING_CONTACT_TTL_MIN:
+                from src.engine.supabase_client import save_demo_lead, clear_pending_contact_request
+                from src.engine.phone_geo import detect_country
+                country_tuple = detect_country(phone)
+                country_name = country_tuple[1] if country_tuple else None
+                await save_demo_lead(
+                    phone=phone,
+                    implementation=resolved_impl,
+                    country=country_name,
+                    payload=body,
+                )
+                await clear_pending_contact_request(phone)
+                await send_message(
+                    from_phone,
+                    "¡Gracias! 🙌 Alguien del equipo de Radar Xponencial te va a contactar en menos de 24h hábiles.\n\n"
+                    "Mientras tanto, si quieres seguir explorando escribe *otro* para probar el otro demo o envía más fotos para otro análisis.",
+                    from_number=to_number,
+                )
+                logger.info("demo_lead_captured", phone=phone, impl=resolved_impl)
+                twiml = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
+                return Response(content=twiml, media_type="application/xml")
+            else:
+                # Stale pending flag — clear silently and fall through to normal handling
+                from src.engine.supabase_client import clear_pending_contact_request
+                await clear_pending_contact_request(phone)
+
+        # Demo CTA handlers: active only when current impl is in demo_mode
+        if impl_config and impl_config.onboarding_config.get("demo_mode"):
+            # "otro" — switch to the other demo (fresh session)
+            if body_lower in CTA_OTRO_KEYWORDS:
+                target_impl_id = OTHER_DEMO_MAP.get(resolved_impl)
+                if target_impl_id:
+                    try:
+                        from src.engine.config_loader import get_implementation
+                        from src.engine.supabase_client import (
+                            upsert_user,
+                            update_session_implementation_today,
+                            clear_session_files_today,
+                        )
+                        target_config = await get_implementation(target_impl_id)
+                        await upsert_user(phone, target_impl_id)
+                        await update_session_implementation_today(phone, target_impl_id)
+                        await clear_session_files_today(phone)
+                        post_switch = target_config.onboarding_config.get(
+                            "post_switch_message",
+                            f"Cambiado a *{target_config.name}*. Envíame fotos y escribe *generar* cuando termines.",
+                        )
+                        await send_message(from_phone, post_switch, from_number=to_number)
+                        logger.info("cta_otro_switched", phone=phone, from_impl=resolved_impl, to_impl=target_impl_id)
+                    except Exception as e:
+                        logger.error("cta_otro_failed", phone=phone, error=str(e))
+                        await send_message(from_phone, "No pude cambiar de demo en este momento. Escribe *menu* para ver las opciones.", from_number=to_number)
+                else:
+                    await send_message(from_phone, "No hay otro demo disponible ahora mismo. Escribe *menu* para ver opciones.", from_number=to_number)
+                twiml = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
+                return Response(content=twiml, media_type="application/xml")
+
+            # "agenda" — send calendar URL (configurable per impl, fallback otherwise)
+            if body_lower in CTA_AGENDA_KEYWORDS:
+                calendar_url = impl_config.onboarding_config.get("cta_calendar_url")
+                if calendar_url:
+                    msg = (
+                        f"📅 Reserva una demo con nuestro equipo aquí:\n{calendar_url}\n\n"
+                        f"Tomamos 20-30 minutos, te mostramos Radar Xponencial con tu caso real y resolvemos dudas."
+                    )
+                else:
+                    msg = (
+                        "📅 Para agendar una demo, escribe *contacto* y déjanos tu email o LinkedIn. "
+                        "Te contactamos en menos de 24h hábiles para coordinar."
+                    )
+                await send_message(from_phone, msg, from_number=to_number)
+                logger.info("cta_agenda_sent", phone=phone, impl=resolved_impl, has_url=bool(calendar_url))
+                twiml = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
+                return Response(content=twiml, media_type="application/xml")
+
+            # "contacto" — prompt for contact info and set pending flag
+            if body_lower in CTA_CONTACTO_KEYWORDS:
+                from src.engine.supabase_client import set_pending_contact_request, upsert_user
+                # Ensure user row exists first (pending flag needs a row)
+                if not user:
+                    await upsert_user(phone, resolved_impl or settings.default_implementation)
+                await set_pending_contact_request(phone)
+                await send_message(
+                    from_phone,
+                    "💬 ¡Perfecto! Déjanos tus datos en un solo mensaje para contactarte:\n\n"
+                    "*Nombre*, *empresa*, y *email* o *LinkedIn*.\n\n"
+                    "Ejemplo: _María López, Mondelez España, maria@mondelez.com_",
+                    from_number=to_number,
+                )
+                logger.info("cta_contacto_prompted", phone=phone, impl=resolved_impl)
+                twiml = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
+                return Response(content=twiml, media_type="application/xml")
+
         # Demo mode trigger: if impl is in demo_mode and user types a trigger keyword,
         # gather today's session files and generate a consolidated report.
         if (
@@ -790,6 +908,20 @@ async def _run_demo_batch_safe(
             total_files=len(files),
             images=len(images),
         )
+
+        # CTA footer — sent as separate message so it renders below the report
+        if impl_config.onboarding_config.get("cta_footer_enabled", True):
+            cta_footer = (
+                "━━━━━━━━━━━━━━━━━━━━\n"
+                "*¿Qué sigue?*\n\n"
+                "📊 Escribe *otro* para probar el otro demo\n"
+                "📅 Escribe *agenda* para reservar una demo con nuestro equipo\n"
+                "💬 Escribe *contacto* para dejar tus datos y que te llamemos"
+            )
+            try:
+                await send_message(from_phone, cta_footer, from_number=to_number)
+            except Exception as e:
+                logger.warning("cta_footer_send_failed", phone=phone, error=str(e))
     except Exception as e:
         logger.error(
             "demo_batch_failed",
