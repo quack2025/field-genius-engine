@@ -23,16 +23,18 @@ from anthropic import AsyncAnthropic
 from src.config.settings import settings
 from src.engine.ai_semaphore import get_ai_semaphore
 from src.engine.config_loader import ImplementationConfig
-from src.engine.vision import analyze_from_storage
-from src.engine.transcriber import transcribe
+from src.engine.vision import analyze_from_storage, analyze_image
+from src.engine.transcriber import transcribe, transcribe_bytes
+from src.engine.video import process_video
 
 logger = structlog.get_logger(__name__)
 
 HAIKU = "claude-haiku-4-5-20251001"
 
-# Hard caps to keep latency + cost reasonable in demo mode
+# Soft caps for analysis (user can send more — most recent are kept)
 MAX_IMAGES_PER_BATCH = 8
 MAX_AUDIOS_PER_BATCH = 4
+MAX_VIDEOS_PER_BATCH = 2  # videos are expensive (ffmpeg + vision + whisper)
 
 _client: AsyncAnthropic | None = None
 
@@ -107,18 +109,22 @@ async def generate_demo_report(
     """
     start = time.time()
 
-    # Split files by type and apply caps
+    # Split files by type and apply soft caps (keep most recent)
     images = [f for f in files if f.get("type") == "image" and f.get("storage_path")]
+    videos = [f for f in files if f.get("type") == "video" and f.get("storage_path")]
     audios = [f for f in files if f.get("type") == "audio" and f.get("storage_path")]
 
     if len(images) > MAX_IMAGES_PER_BATCH:
         logger.info("demo_batch_images_capped", total=len(images), kept=MAX_IMAGES_PER_BATCH)
-        images = images[-MAX_IMAGES_PER_BATCH:]  # Keep most recent
+        images = images[-MAX_IMAGES_PER_BATCH:]
+    if len(videos) > MAX_VIDEOS_PER_BATCH:
+        logger.info("demo_batch_videos_capped", total=len(videos), kept=MAX_VIDEOS_PER_BATCH)
+        videos = videos[-MAX_VIDEOS_PER_BATCH:]
     if len(audios) > MAX_AUDIOS_PER_BATCH:
         audios = audios[-MAX_AUDIOS_PER_BATCH:]
 
-    if not images:
-        raise RuntimeError("no_images_in_batch")
+    if not images and not videos:
+        raise RuntimeError("no_visual_content")
 
     # Build vision context (common to all image analyses)
     context_parts: list[str] = []
@@ -130,8 +136,28 @@ async def generate_demo_report(
         context_parts.append(f"El usuario escribió: \"{text_context}\"")
     vision_context = " | ".join(context_parts)
 
-    # Step 1: Parallel vision analysis on all images
-    image_tasks = [
+    # Step 1a: Process videos inline — extract first frame + transcribe audio track.
+    # Each video contributes one "image" to the vision pool and one transcript.
+    video_frame_bytes: list[tuple[bytes, str]] = []  # (frame_bytes, label)
+    video_transcripts: list[str] = []
+    for i, vid in enumerate(videos):
+        try:
+            vr = await process_video(vid["storage_path"])
+            if vr.frames:
+                # Use the first frame as the representative image
+                video_frame_bytes.append((vr.frames[0], f"Video {i + 1}"))
+            if vr.audio_bytes:
+                try:
+                    t = await transcribe_bytes(vr.audio_bytes, f"video_{i + 1}.ogg")
+                    if t and t.strip():
+                        video_transcripts.append(f"**Video {i + 1} (audio)**: {t.strip()}")
+                except Exception as e:
+                    logger.warning("demo_video_audio_failed", idx=i, error=str(e)[:100])
+        except Exception as e:
+            logger.warning("demo_video_process_failed", idx=i, error=str(e)[:100])
+
+    # Step 1b: Parallel vision analysis — stored images + in-memory video frames
+    storage_image_tasks = [
         analyze_from_storage(
             storage_path=img["storage_path"],
             context=vision_context,
@@ -139,27 +165,51 @@ async def generate_demo_report(
         )
         for img in images
     ]
-    # Step 2: Parallel audio transcription
+    frame_tasks = [
+        analyze_image(
+            image_bytes=frame_bytes,
+            context=vision_context,
+            implementation=impl_config.id,
+        )
+        for frame_bytes, _label in video_frame_bytes
+    ]
+    # Step 1c: Parallel audio transcription for standalone audio files
     audio_tasks = [transcribe(a["storage_path"]) for a in audios]
 
     all_results = await asyncio.gather(
-        *image_tasks, *audio_tasks, return_exceptions=True
+        *storage_image_tasks, *frame_tasks, *audio_tasks, return_exceptions=True
     )
-    image_results = all_results[: len(images)]
-    audio_results = all_results[len(images) :]
+    n_stored = len(storage_image_tasks)
+    n_frames = len(frame_tasks)
+    stored_results = all_results[:n_stored]
+    frame_results = all_results[n_stored : n_stored + n_frames]
+    audio_results = all_results[n_stored + n_frames :]
 
-    # Collect successful descriptions
-    descriptions: list[str] = []
-    for i, result in enumerate(image_results):
+    # Collect successful descriptions with source tag so we can count by type later
+    tagged_descriptions: list[tuple[str, str]] = []  # (source_type, formatted text)
+    for i, result in enumerate(stored_results):
         if isinstance(result, Exception) or (isinstance(result, str) and result.startswith("[Error")):
             logger.warning("demo_image_analysis_failed", idx=i, error=str(result)[:100])
             continue
-        descriptions.append(f"**Foto {i + 1}** ({images[i].get('filename', 'unknown')}):\n{result}")
+        tagged_descriptions.append(
+            ("photo", f"**Foto {i + 1}** ({images[i].get('filename', 'unknown')}):\n{result}")
+        )
 
-    if not descriptions:
-        raise RuntimeError("all_images_failed_analysis")
+    for i, result in enumerate(frame_results):
+        label = video_frame_bytes[i][1]
+        if isinstance(result, Exception) or (isinstance(result, str) and result.startswith("[Error")):
+            logger.warning("demo_video_frame_analysis_failed", idx=i, error=str(result)[:100])
+            continue
+        tagged_descriptions.append(("video", f"**{label}** (primer frame):\n{result}"))
 
-    transcripts: list[str] = []
+    if not tagged_descriptions:
+        raise RuntimeError("all_visual_content_failed")
+
+    descriptions = [text for _, text in tagged_descriptions]
+    n_photos = sum(1 for t, _ in tagged_descriptions if t == "photo")
+    n_video_frames = sum(1 for t, _ in tagged_descriptions if t == "video")
+
+    transcripts: list[str] = list(video_transcripts)
     for i, result in enumerate(audio_results):
         if isinstance(result, Exception):
             logger.warning("demo_audio_transcribe_failed", idx=i, error=str(result)[:100])
@@ -168,10 +218,14 @@ async def generate_demo_report(
             transcripts.append(f"**Audio {i + 1}**: {result.strip()}")
 
     # Step 3: Synthesize consolidated report
-    asset_pieces = [f"{len(descriptions)} foto{'s' if len(descriptions) != 1 else ''}"]
+    asset_pieces: list[str] = []
+    if n_photos:
+        asset_pieces.append(f"{n_photos} foto{'s' if n_photos != 1 else ''}")
+    if n_video_frames:
+        asset_pieces.append(f"{n_video_frames} video{'s' if n_video_frames != 1 else ''}")
     if transcripts:
         asset_pieces.append(f"{len(transcripts)} audio{'s' if len(transcripts) != 1 else ''}")
-    asset_summary = " y ".join(asset_pieces)
+    asset_summary = " y ".join(asset_pieces) or "tu material"
 
     location_line = location_hint or (f"Mercado: {country_name}" if country_name else "Análisis de campo")
 
@@ -213,12 +267,14 @@ async def generate_demo_report(
     logger.info(
         "demo_batch_report_generated",
         impl=impl_config.id,
-        images_analyzed=len(descriptions),
-        images_failed=len(images) - len(descriptions),
-        audios_transcribed=len(transcripts),
+        photos=n_photos,
+        video_frames=n_video_frames,
+        audios=len(transcripts),
+        images_failed=len(images) - n_photos,
         chars=len(report),
         elapsed_ms=elapsed_ms,
         country=country_name,
+        has_location=bool(location_hint),
         input_tokens=message.usage.input_tokens,
         output_tokens=message.usage.output_tokens,
     )

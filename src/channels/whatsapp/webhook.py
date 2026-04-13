@@ -885,16 +885,43 @@ async def _run_demo_batch_safe(
 
         files = await get_session_files(session_id)
         images = [f for f in files if f.get("type") == "image" and f.get("storage_path")]
+        videos = [f for f in files if f.get("type") == "video" and f.get("storage_path")]
+        audios = [f for f in files if f.get("type") == "audio" and f.get("storage_path")]
+        locations = [f for f in files if f.get("type") == "location"]
 
-        if not images:
-            await send_message(
-                from_phone,
-                "Aún no recibí ninguna foto 🤔\n\n"
-                "Envíame al menos una imagen (góndola, anaquel, publicidad, punto de venta) y luego escribe *generar*.",
-                from_number=to_number,
+        if not images and not videos:
+            if audios:
+                msg = (
+                    "Recibí tu(s) audio(s) 🎤 pero para el análisis necesito al menos "
+                    "una *foto* o *video* del punto de venta, publicidad o lo que quieras analizar.\n\n"
+                    "Envía una imagen y luego escribe *generar*."
+                )
+            else:
+                msg = (
+                    "Aún no recibí ningún material 🤔\n\n"
+                    "Envíame al menos una *foto* o *video* del lugar y luego escribe *generar*."
+                )
+            await send_message(from_phone, msg, from_number=to_number)
+            logger.info(
+                "demo_batch_no_visual",
+                phone=phone,
+                session_id=session_id[:8],
+                audios=len(audios),
             )
-            logger.info("demo_batch_no_images", phone=phone, session_id=session_id[:8])
             return
+
+        # Use the most recently shared location as hint for the analysis
+        location_hint: str | None = None
+        if locations:
+            last_loc = locations[-1]
+            addr = (last_loc.get("address") or "").strip()
+            label = (last_loc.get("label") or "").strip()
+            if label and addr:
+                location_hint = f"{label} — {addr}"
+            elif addr or label:
+                location_hint = addr or label
+            elif last_loc.get("latitude") and last_loc.get("longitude"):
+                location_hint = f"Lat {last_loc['latitude']}, Lng {last_loc['longitude']}"
 
         country_tuple = detect_country(phone)
         country_name = country_tuple[1] if country_tuple else None
@@ -903,7 +930,7 @@ async def _run_demo_batch_safe(
             files=files,
             impl_config=impl_config,
             country_name=country_name,
-            location_hint=None,
+            location_hint=location_hint,
             text_context=None,
         )
 
