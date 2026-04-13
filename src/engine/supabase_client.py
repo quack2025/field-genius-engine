@@ -276,6 +276,51 @@ async def upsert_user(
     return await _run(_sync)
 
 
+async def clear_session_files_today(phone: str) -> int:
+    """Delete all session_files and empty raw_files for today's session.
+
+    Used when a user switches demos mid-session — each demo should start fresh
+    instead of mixing files from different analysis contexts.
+
+    Returns the number of rows deleted from session_files.
+    """
+    def _sync() -> int:
+        client = get_client()
+        today = datetime.date.today().isoformat()
+        # Find today's session
+        session_result = (
+            client.table("sessions")
+            .select("id")
+            .eq("user_phone", phone)
+            .eq("date", today)
+            .maybe_single()
+            .execute()
+        )
+        if session_result is None or not getattr(session_result, "data", None):
+            return 0
+        session_id = session_result.data["id"]
+
+        # Delete from normalized session_files table
+        deleted = client.table("session_files").delete().eq("session_id", session_id).execute()
+        deleted_count = len(deleted.data) if deleted.data else 0
+
+        # Empty the raw_files JSONB column for backward compat
+        client.table("sessions").update({
+            "raw_files": [],
+            "updated_at": datetime.datetime.now(datetime.UTC).isoformat(),
+        }).eq("id", session_id).execute()
+
+        return deleted_count
+
+    try:
+        count = await _run(_sync)
+        logger.info("session_files_cleared", phone=phone, deleted=count)
+        return count
+    except Exception as e:
+        logger.warning("session_files_clear_failed", phone=phone, error=str(e))
+        return 0
+
+
 async def update_session_implementation_today(phone: str, impl_id: str) -> None:
     """Update today's session implementation for a phone (if a session exists).
 

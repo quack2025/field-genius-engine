@@ -189,10 +189,14 @@ async def _webhook_inner(request: Request) -> Response:
                         from src.engine.supabase_client import (
                             upsert_user,
                             update_session_implementation_today,
+                            clear_session_files_today,
                         )
                         # Create or update user row so the switch persists across messages
                         await upsert_user(phone, matched_impl)
                         await update_session_implementation_today(phone, matched_impl)
+                        # Fresh-start the session: each demo switch wipes previously
+                        # accumulated files so reports don't mix contexts (retail + telecom).
+                        await clear_session_files_today(phone)
                         # Re-fetch so later steps in this request see the new impl
                         user = await get_user_by_phone(phone)
                         # Use configurable post_switch_message if set, fallback to generic ACK
