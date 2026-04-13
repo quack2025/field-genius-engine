@@ -53,12 +53,48 @@ CTA_CONTACTO_KEYWORDS = {"contacto", "contactar", "contact", "hablar", "humano"}
 # TTL (minutes) for a pending contact-info capture — after this, ignore stale flag
 PENDING_CONTACT_TTL_MIN = 10
 
+# POC gating — "POC" is a meta-keyword that asks the user which client POC they want
+POC_KEYWORDS = {"poc", "p.o.c.", "p.o.c"}
+POC_COMPANY_KEYWORDS = {"argos", "telecable"}
+PENDING_POC_TTL_MIN = 10
+
+# Location prompt — asked on first media in demo mode
+LOCATION_PROMPT_TTL_MIN = 10
+
 # Hardcoded map of which demo is "the other one" for the `otro` CTA.
-# When backoffice supports demo-mode config, this becomes dynamic.
+# After the POC gating sprint, the two public demos are Retail (laundry_care) and
+# whichever POC the user is in. For now we keep the simple laundry_care ↔ telecable
+# toggle; Argos-bound users who write "otro" fall through to laundry_care too.
 OTHER_DEMO_MAP = {
-    "laundry_care": "demo_telecom",
-    "demo_telecom": "laundry_care",
+    "laundry_care": "telecable",
+    "telecable": "laundry_care",
+    "argos": "laundry_care",
 }
+
+# Explicit commands the user can type even while in a pending POC/location state.
+# These are "escape hatches" — they override the pending flow cleanly, falling
+# through to their normal handler instead of being treated as lead data / wrong
+# company name / etc.
+DEMO_ESCAPE_KEYWORDS = (
+    {"menu", "menú", "proyectos", "cambiar"}
+    | {"generar", "generar reporte", "reporte", "listo", "ya", "analizar", "analiza", "fin", "terminé", "termine", "done"}
+    | CTA_OTRO_KEYWORDS
+    | CTA_CONTACTO_KEYWORDS
+    | {"retail", "cpg", "shopper"}  # demo_keywords of laundry_care (the general retail demo)
+)
+
+
+def _pending_is_active(iso_ts: str | None, ttl_minutes: int) -> bool:
+    """Check if a timestamptz ISO string from DB is still within TTL from now."""
+    if not iso_ts:
+        return False
+    try:
+        import datetime as _dt
+        ts = _dt.datetime.fromisoformat(iso_ts.replace("Z", "+00:00"))
+        age_min = (_dt.datetime.now(_dt.UTC) - ts).total_seconds() / 60
+        return age_min < ttl_minutes
+    except Exception:
+        return False
 
 
 def _is_duplicate(message_sid: str) -> bool:
@@ -180,6 +216,8 @@ async def _webhook_inner(request: Request) -> Response:
     # ── Access control + Keyword routing + Onboarding flow ──
     impl_config = None
     user = None
+    pending_poc_active = False
+    pending_location_active = False
     if resolved_impl:
         try:
             from src.engine.config_loader import get_implementation, get_impl_by_keyword
@@ -187,6 +225,16 @@ async def _webhook_inner(request: Request) -> Response:
 
             # Step 0: Read user early (needed by keyword + sticky logic)
             user = await get_user_by_phone(phone)
+            # Capture pending-state snapshot for this request (so we have a
+            # stable view regardless of when clears happen later in the flow)
+            pending_poc_active = (
+                user is not None
+                and _pending_is_active(user.get("pending_poc_selection_at"), PENDING_POC_TTL_MIN)
+            )
+            pending_location_active = (
+                user is not None
+                and _pending_is_active(user.get("pending_location_request_at"), LOCATION_PROMPT_TTL_MIN)
+            )
 
             # Step 1: Keyword override — strongest signal
             # If the first token of the body matches any implementation's demo_keywords,
@@ -204,6 +252,8 @@ async def _webhook_inner(request: Request) -> Response:
                             upsert_user,
                             update_session_implementation_today,
                             clear_session_files_today,
+                            clear_pending_poc_selection,
+                            clear_pending_location_request,
                         )
                         # Create or update user row so the switch persists across messages
                         await upsert_user(phone, matched_impl)
@@ -211,6 +261,10 @@ async def _webhook_inner(request: Request) -> Response:
                         # Fresh-start the session: each demo switch wipes previously
                         # accumulated files so reports don't mix contexts (retail + telecom).
                         await clear_session_files_today(phone)
+                        # Clear POC/location pending state — user made an explicit choice,
+                        # so any stale pending flags are no longer valid.
+                        await clear_pending_poc_selection(phone)
+                        await clear_pending_location_request(phone)
                         # Re-fetch so later steps in this request see the new impl
                         user = await get_user_by_phone(phone)
                         # Use configurable post_switch_message if set, fallback to generic ACK
@@ -395,13 +449,18 @@ async def _webhook_inner(request: Request) -> Response:
                 "timestamp": datetime.datetime.now(datetime.UTC).isoformat(),
             }
             await handle_media(phone, location_meta)
+            # Clear any pending location-request flag — user answered it
+            try:
+                from src.engine.supabase_client import clear_pending_location_request
+                await clear_pending_location_request(phone)
+                pending_location_active = False
+            except Exception:
+                pass
             # Friendlier response for demo visitors — location alone doesn't generate a report
             location_ack = (
                 "Ubicación recibida 📍\n\n"
-                "Para analizar lo que ves en este punto, envíame una *foto* de:\n"
-                "• Una góndola, anaquel o exhibición\n"
-                "• Publicidad o material POP\n"
-                "• El punto de venta completo"
+                "Sigue enviando fotos, audios o videos de lo que quieras analizar, "
+                "y escribe *generar* cuando termines. Tu ubicación se incluirá en el análisis."
             )
             await send_message(from_phone, location_ack, from_number=to_number)
             logger.info(
@@ -415,6 +474,21 @@ async def _webhook_inner(request: Request) -> Response:
             logger.error("location_processing_failed", phone=phone, error=str(e))
 
     # Process media attachments
+    # POC gating: if the user tapped "POC" and is pending a company selection,
+    # block ALL media until they answer with argos/telecable. Send the prompt
+    # once per request (not per-attachment) to avoid spamming for multi-media.
+    if num_media > 0 and pending_poc_active:
+        await send_message(
+            from_phone,
+            "Primero dime el nombre de tu empresa para activar tu POC personalizado:\n\n"
+            "• *argos*\n"
+            "• *telecable*\n\n"
+            "Cuando escribas el nombre, analizo tu material con los frameworks de ese cliente.",
+            from_number=to_number,
+        )
+        logger.info("poc_pending_blocked_media", phone=phone, num_media=num_media)
+        num_media = 0  # skip the media loop below
+
     for i in range(num_media):
         media_url = params.get(f"MediaUrl{i}", "")
         content_type = params.get(f"MediaContentType{i}", "application/octet-stream")
@@ -565,6 +639,34 @@ async def _webhook_inner(request: Request) -> Response:
                         f"Envía más si quieres o escribe *generar* cuando termines para ver el análisis."
                     )
                 await send_message(from_phone, ack, from_number=to_number)
+
+                # Location prompt: if this was the first visual piece of material
+                # in the session AND there's no location yet AND we haven't already
+                # prompted (pending_location_active), ask now.
+                try:
+                    visual_total = sum(1 for f in all_files if f.get("type") in ("image", "audio", "video"))
+                    has_location = any(f.get("type") == "location" for f in all_files)
+                    if (
+                        visual_total == 1
+                        and not has_location
+                        and not pending_location_active
+                    ):
+                        from src.engine.supabase_client import set_pending_location_request
+                        await set_pending_location_request(phone)
+                        pending_location_active = True
+                        await send_message(
+                            from_phone,
+                            "¿Dónde tomaste esto? 📍\n\n"
+                            "Para que el análisis sea más preciso, cuéntame dónde estás:\n\n"
+                            "📎 *Opción 1*: Comparte tu ubicación desde el menú adjuntar de WhatsApp\n"
+                            "✍️ *Opción 2*: Escríbeme una descripción breve\n"
+                            "   _Ejemplos: \"supermercado Éxito Chapinero\", \"norte de Bogotá\", \"Mercadona Madrid centro\"_\n\n"
+                            "Puedes seguir enviando material mientras tanto. Al escribir *generar* analizo todo junto.",
+                            from_number=to_number,
+                        )
+                        logger.info("location_prompt_sent", phone=phone, session_id=session["id"][:8])
+                except Exception as e:
+                    logger.warning("location_prompt_failed", phone=phone, error=str(e))
             else:
                 # Field-agent flow: accumulate and wait for "reporte" trigger word
                 file_count = len(session.get("raw_files", [])) + 1
@@ -593,6 +695,106 @@ async def _webhook_inner(request: Request) -> Response:
             await send_message(from_phone, menu_selection["message"])
             twiml = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
             return Response(content=twiml, media_type="application/xml")
+
+        # ── POC gating flow ────────────────────────────────────────
+        # "POC" intent: user explicitly asked for a personalized POC. Set the
+        # pending flag and prompt for the client company name.
+        is_demo_impl = bool(impl_config and impl_config.onboarding_config.get("demo_mode"))
+        if is_demo_impl and body_lower in POC_KEYWORDS:
+            from src.engine.supabase_client import set_pending_poc_selection, upsert_user
+            if not user:
+                await upsert_user(phone, resolved_impl or settings.default_implementation)
+            await set_pending_poc_selection(phone)
+            await send_message(
+                from_phone,
+                "Los POCs de Radar Xponencial están personalizados para clientes específicos 🎯\n\n"
+                "Escribe el nombre de tu empresa para activar el demo con sus frameworks reales:\n\n"
+                "• *argos*\n"
+                "• *telecable*\n\n"
+                "O escribe *retail* si prefieres el demo general de CPG.",
+                from_number=to_number,
+            )
+            logger.info("poc_prompt_sent", phone=phone, impl=resolved_impl)
+            twiml = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
+            return Response(content=twiml, media_type="application/xml")
+
+        # Pending POC follow-up: user previously tapped POC and is expected to
+        # reply with a company name. Step 1 at the top already handles the
+        # happy path when they type "argos"/"telecable" (keyword switch fires),
+        # so reaching this branch means either a defensive same-impl case or
+        # the user typed something that isn't a recognized command.
+        if is_demo_impl and pending_poc_active:
+            from src.engine.supabase_client import (
+                clear_pending_poc_selection as _clear_poc,
+                upsert_user as _upsert_user,
+                update_session_implementation_today as _update_session_impl,
+                clear_session_files_today as _clear_files,
+            )
+            if body_lower in POC_COMPANY_KEYWORDS:
+                # Defensive — Step 1 would normally handle this. Clear and fall through.
+                await _clear_poc(phone)
+                pending_poc_active = False
+            elif body_lower in DEMO_ESCAPE_KEYWORDS:
+                # User escaped with a known command; let the downstream handlers run.
+                await _clear_poc(phone)
+                pending_poc_active = False
+            else:
+                # Unknown text while pending POC → redirect to retail demo gracefully.
+                await _clear_poc(phone)
+                pending_poc_active = False
+                target_impl_id = "laundry_care"
+                try:
+                    from src.engine.config_loader import get_implementation
+                    target_config = await get_implementation(target_impl_id)
+                    await _upsert_user(phone, target_impl_id)
+                    await _update_session_impl(phone, target_impl_id)
+                    await _clear_files(phone)
+                    post_switch = (target_config.onboarding_config or {}).get(
+                        "post_switch_message",
+                        "Cambiado al *Demo Retail*. Enviame fotos y escribe *generar* cuando termines.",
+                    )
+                    await send_message(
+                        from_phone,
+                        "No reconocí ese cliente como un POC disponible 🤔\n\n"
+                        "Te llevo al *Demo Retail general* para que veas cómo funciona Radar Xponencial. "
+                        "Si querías otra empresa, escribe *argos* o *telecable* después.",
+                        from_number=to_number,
+                    )
+                    await send_message(from_phone, post_switch, from_number=to_number)
+                    logger.info("poc_wrong_name_redirected", phone=phone, wrote=body_lower[:30])
+                except Exception as e:
+                    logger.error("poc_redirect_failed", phone=phone, error=str(e))
+                twiml = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
+                return Response(content=twiml, media_type="application/xml")
+
+        # Pending location follow-up: user was asked for their location and the
+        # next non-command text is saved as a free-form description.
+        if is_demo_impl and pending_location_active:
+            from src.engine.supabase_client import (
+                clear_pending_location_request as _clear_loc,
+                add_text_location_to_session,
+                get_or_create_session as _get_session,
+            )
+            if body_lower in DEMO_ESCAPE_KEYWORDS or body_lower in POC_KEYWORDS or body_lower in POC_COMPANY_KEYWORDS:
+                # Escape — user ignored the prompt, let the downstream handlers run.
+                await _clear_loc(phone)
+                pending_location_active = False
+            else:
+                # Treat as a location description
+                import datetime as _dt
+                sess = await _get_session(phone, _dt.date.today(), resolved_impl)
+                await add_text_location_to_session(sess["id"], body)
+                await _clear_loc(phone)
+                pending_location_active = False
+                await send_message(
+                    from_phone,
+                    f"Anotado 📍 _{body[:120]}_\n\n"
+                    f"Sigue enviando material (fotos, audios, videos) o escribe *generar* cuando termines.",
+                    from_number=to_number,
+                )
+                logger.info("text_location_captured", phone=phone, chars=len(body))
+                twiml = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
+                return Response(content=twiml, media_type="application/xml")
 
         # Pending contact capture: if user previously wrote "contacto" and we're
         # still within the TTL window, treat this text as the lead payload.
@@ -688,6 +890,14 @@ async def _webhook_inner(request: Request) -> Response:
         ):
             import datetime as _dt
             from src.engine.supabase_client import get_or_create_session
+            # Silently clear any pending location — user is ready to generate
+            if pending_location_active:
+                try:
+                    from src.engine.supabase_client import clear_pending_location_request
+                    await clear_pending_location_request(phone)
+                    pending_location_active = False
+                except Exception:
+                    pass
             session = await get_or_create_session(phone, _dt.date.today(), resolved_impl)
             await send_message(
                 from_phone,

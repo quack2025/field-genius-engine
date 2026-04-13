@@ -417,6 +417,98 @@ async def list_active_implementations() -> list[dict[str, Any]]:
     return await _run(_sync)
 
 
+async def set_pending_poc_selection(phone: str) -> None:
+    """Mark a user as waiting to provide a POC company name (for demo POC gating)."""
+    def _sync():
+        client = get_client()
+        client.table("users").update({
+            "pending_poc_selection_at": datetime.datetime.now(datetime.UTC).isoformat(),
+        }).eq("phone", phone).execute()
+    try:
+        await _run(_sync)
+    except Exception as e:
+        logger.warning("set_pending_poc_failed", phone=phone, error=str(e))
+
+
+async def clear_pending_poc_selection(phone: str) -> None:
+    """Clear the pending POC selection flag. Idempotent."""
+    def _sync():
+        client = get_client()
+        client.table("users").update({
+            "pending_poc_selection_at": None,
+        }).eq("phone", phone).execute()
+    try:
+        await _run(_sync)
+    except Exception as e:
+        logger.warning("clear_pending_poc_failed", phone=phone, error=str(e))
+
+
+async def set_pending_location_request(phone: str) -> None:
+    """Mark a user as having been prompted for location in the current demo session."""
+    def _sync():
+        client = get_client()
+        client.table("users").update({
+            "pending_location_request_at": datetime.datetime.now(datetime.UTC).isoformat(),
+        }).eq("phone", phone).execute()
+    try:
+        await _run(_sync)
+    except Exception as e:
+        logger.warning("set_pending_location_failed", phone=phone, error=str(e))
+
+
+async def clear_pending_location_request(phone: str) -> None:
+    """Clear the pending location request flag. Idempotent."""
+    def _sync():
+        client = get_client()
+        client.table("users").update({
+            "pending_location_request_at": None,
+        }).eq("phone", phone).execute()
+    try:
+        await _run(_sync)
+    except Exception as e:
+        logger.warning("clear_pending_location_failed", phone=phone, error=str(e))
+
+
+async def add_text_location_to_session(session_id: str, address_text: str) -> None:
+    """Insert a textual location row into session_files (type=location, no lat/lng).
+
+    Used when the user answers the location prompt with a description like
+    "Mercadona Madrid centro" instead of sharing their GPS coordinates.
+    """
+    loc_meta = {
+        "filename": None,
+        "storage_path": None,
+        "type": "location",
+        "content_type": "text/plain",
+        "address": address_text[:500],
+        "label": None,
+        "latitude": None,
+        "longitude": None,
+        "timestamp": datetime.datetime.now(datetime.UTC).isoformat(),
+    }
+    def _sync():
+        client = get_client()
+        row = {
+            "session_id": session_id,
+            "filename": None,
+            "storage_path": None,
+            "type": "location",
+            "content_type": "text/plain",
+            "size_bytes": 0,
+            "public_url": None,
+            "latitude": None,
+            "longitude": None,
+            "address": loc_meta["address"],
+            "label": None,
+        }
+        try:
+            client.table("session_files").insert(row).execute()
+        except Exception as e:
+            logger.warning("text_location_insert_failed", error=str(e))
+    await _run(_sync)
+    logger.info("text_location_added", session_id=session_id, chars=len(address_text))
+
+
 async def set_pending_contact_request(phone: str) -> None:
     """Mark a user as waiting to provide contact info (for demo CTA flow)."""
     def _sync():
