@@ -181,18 +181,14 @@ async def _webhook_inner(request: Request) -> Response:
                         target_config = None
                     if target_config and target_config.access_mode == "open":
                         from src.engine.supabase_client import (
-                            update_user_implementation,
+                            upsert_user,
                             update_session_implementation_today,
                         )
-                        # Create user if needed (first contact via keyword)
-                        if not user:
-                            # get_or_create_session creates user implicitly; call it with impl override
-                            import datetime as _dt
-                            from src.engine.supabase_client import get_or_create_session as _goc
-                            await _goc(phone, _dt.date.today(), matched_impl)
-                        else:
-                            await update_user_implementation(phone, matched_impl)
-                            await update_session_implementation_today(phone, matched_impl)
+                        # Create or update user row so the switch persists across messages
+                        await upsert_user(phone, matched_impl)
+                        await update_session_implementation_today(phone, matched_impl)
+                        # Re-fetch so later steps in this request see the new impl
+                        user = await get_user_by_phone(phone)
                         # Use configurable post_switch_message if set, fallback to generic ACK
                         target_onboarding = target_config.onboarding_config or {}
                         ack_msg = target_onboarding.get(

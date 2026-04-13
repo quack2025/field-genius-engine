@@ -106,10 +106,17 @@ async def download_and_store(
         storage_path=storage_path,
     )
 
-    # Validate URL is from Twilio (SSRF protection)
+    # Validate URL is from Twilio (SSRF protection).
+    # Twilio redirects from api.twilio.com to *.twiliocdn.com — we allow any
+    # subdomain of twiliocdn.com (media, mms, ccustatic, etc) + api.twilio.com itself.
     parsed = urlparse(media_url)
-    allowed_hosts = {'api.twilio.com', 'media.twiliocdn.com'}
-    if parsed.scheme != 'https' or parsed.hostname not in allowed_hosts:
+    host = (parsed.hostname or "").lower()
+    allowed = (
+        host == "api.twilio.com"
+        or host.endswith(".twiliocdn.com")
+        or host == "twiliocdn.com"
+    )
+    if parsed.scheme != 'https' or not allowed:
         raise ValueError(f'Media URL not from allowed Twilio domain: {media_url[:60]}')
 
     try:
@@ -122,18 +129,27 @@ async def download_and_store(
                 timeout=30.0,
             )
 
-            # Handle Twilio redirects manually — only follow to allowed hosts
-            if response.status_code in (301, 302, 303, 307, 308):
+            # Handle Twilio redirects manually — only follow to allowed hosts.
+            # Follow up to 3 redirects (Twilio typically does api.twilio.com → *.twiliocdn.com).
+            max_redirects = 3
+            while response.status_code in (301, 302, 303, 307, 308) and max_redirects > 0:
                 redirect_url = response.headers.get("location", "")
                 redirect_parsed = urlparse(redirect_url)
-                if redirect_parsed.hostname not in allowed_hosts:
-                    raise ValueError(f"Redirect to disallowed host: {redirect_parsed.hostname}")
+                r_host = (redirect_parsed.hostname or "").lower()
+                r_allowed = (
+                    r_host == "api.twilio.com"
+                    or r_host.endswith(".twiliocdn.com")
+                    or r_host == "twiliocdn.com"
+                )
+                if not r_allowed:
+                    raise ValueError(f"Redirect to disallowed host: {r_host}")
                 response = await http.get(
                     redirect_url,
                     auth=(settings.twilio_account_sid, settings.twilio_auth_token),
                     follow_redirects=False,
                     timeout=30.0,
                 )
+                max_redirects -= 1
 
             response.raise_for_status()
             file_bytes = response.content

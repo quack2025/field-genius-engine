@@ -242,6 +242,40 @@ async def get_session(session_id: str) -> dict[str, Any] | None:
     return await _run(_sync)
 
 
+async def upsert_user(
+    phone: str,
+    implementation: str,
+    name: str | None = None,
+    role: str = "demo_visitor",
+) -> dict[str, Any]:
+    """Create or update a user row. Used when a visitor chooses a demo via keyword
+    so their implementation choice persists across messages.
+
+    Returns the resulting user dict.
+    """
+    def _sync():
+        client = get_client()
+        # Check if user exists
+        existing = client.table("users").select("*").eq("phone", phone).maybe_single().execute()
+        if existing and getattr(existing, "data", None):
+            # Update only the implementation (and name if provided)
+            updates: dict[str, Any] = {"implementation": implementation}
+            if name:
+                updates["name"] = name
+            result = client.table("users").update(updates).eq("phone", phone).execute()
+            return (result.data or [existing.data])[0] if result.data else existing.data
+        # Insert new user
+        new_user = {
+            "phone": phone,
+            "name": name or phone,
+            "implementation": implementation,
+            "role": role,
+        }
+        result = client.table("users").insert(new_user).execute()
+        return result.data[0] if result.data else new_user
+    return await _run(_sync)
+
+
 async def update_session_implementation_today(phone: str, impl_id: str) -> None:
     """Update today's session implementation for a phone (if a session exists).
 
