@@ -31,6 +31,9 @@ router = APIRouter(tags=["webhook"])
 _seen_sids: dict[str, float] = {}
 _DEDUP_TTL_SECONDS = 300  # 5 minutes
 
+# Keywords that trigger sending the configured sample report (no impl switch)
+EXAMPLE_KEYWORDS = {"ejemplo", "example", "sample", "muestra", "ver ejemplo"}
+
 
 def _is_duplicate(message_sid: str) -> bool:
     """Check if MessageSid was already processed. Thread-safe for single process."""
@@ -258,6 +261,22 @@ async def twilio_webhook(request: Request) -> Response:
                         onboarding = impl_config.onboarding_config
                 except Exception:
                     pass  # user's impl doesn't exist or failed to load — stay with resolved_impl
+
+            # Step 3.5: "ejemplo" command — send sample report without processing a real photo
+            if body and body.strip().lower() in EXAMPLE_KEYWORDS:
+                sample = impl_config.onboarding_config.get("sample_report", "")
+                if sample:
+                    await send_message(from_phone, sample, from_number=to_number)
+                    logger.info("sample_report_sent", phone=phone, impl=resolved_impl)
+                else:
+                    await send_message(
+                        from_phone,
+                        "No hay reporte de muestra configurado para este demo. Envia una foto para ver tu análisis real.",
+                        from_number=to_number,
+                    )
+                    logger.warning("sample_report_missing", impl=resolved_impl)
+                twiml = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
+                return Response(content=twiml, media_type="application/xml")
 
             # Step 4: Terms acceptance check
             if user and onboarding.get("require_terms", False) and not user.get("accepted_terms"):
