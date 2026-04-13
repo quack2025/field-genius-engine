@@ -48,7 +48,6 @@ DEMO_TRIGGER_KEYWORDS = {
 
 # CTA keywords shown at the end of each demo report
 CTA_OTRO_KEYWORDS = {"otro", "otro demo", "cambiar demo", "siguiente"}
-CTA_AGENDA_KEYWORDS = {"agenda", "agendar", "llamada", "reunión", "reunion", "meeting"}
 CTA_CONTACTO_KEYWORDS = {"contacto", "contactar", "contact", "hablar", "humano"}
 
 # TTL (minutes) for a pending contact-info capture — after this, ignore stale flag
@@ -662,24 +661,6 @@ async def _webhook_inner(request: Request) -> Response:
                 twiml = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
                 return Response(content=twiml, media_type="application/xml")
 
-            # "agenda" — send calendar URL (configurable per impl, fallback otherwise)
-            if body_lower in CTA_AGENDA_KEYWORDS:
-                calendar_url = impl_config.onboarding_config.get("cta_calendar_url")
-                if calendar_url:
-                    msg = (
-                        f"📅 Reserva una demo con nuestro equipo aquí:\n{calendar_url}\n\n"
-                        f"Tomamos 20-30 minutos, te mostramos Radar Xponencial con tu caso real y resolvemos dudas."
-                    )
-                else:
-                    msg = (
-                        "📅 Para agendar una demo, escribe *contacto* y déjanos tu email o LinkedIn. "
-                        "Te contactamos en menos de 24h hábiles para coordinar."
-                    )
-                await send_message(from_phone, msg, from_number=to_number)
-                logger.info("cta_agenda_sent", phone=phone, impl=resolved_impl, has_url=bool(calendar_url))
-                twiml = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
-                return Response(content=twiml, media_type="application/xml")
-
             # "contacto" — prompt for contact info and set pending flag
             if body_lower in CTA_CONTACTO_KEYWORDS:
                 from src.engine.supabase_client import set_pending_contact_request, upsert_user
@@ -880,7 +861,7 @@ async def _run_demo_batch_safe(
     """
     try:
         from src.engine.demo_analyzer import generate_demo_report
-        from src.engine.phone_geo import detect_country
+        from src.engine.phone_geo import detect_country, country_by_iso
         from src.engine.supabase_client import get_session_files
 
         files = await get_session_files(session_id)
@@ -923,8 +904,20 @@ async def _run_demo_batch_safe(
             elif last_loc.get("latitude") and last_loc.get("longitude"):
                 location_hint = f"Lat {last_loc['latitude']}, Lng {last_loc['longitude']}"
 
-        country_tuple = detect_country(phone)
-        country_name = country_tuple[1] if country_tuple else None
+        # Country resolution per impl config:
+        #   auto  (default) → detect from phone prefix
+        #   fixed           → always use onboarding_config.country_fixed_iso
+        #   none            → skip country context in the prompt
+        country_mode = impl_config.onboarding_config.get("country_mode", "auto")
+        country_name: str | None = None
+        if country_mode == "fixed":
+            fixed_iso = impl_config.onboarding_config.get("country_fixed_iso")
+            resolved = country_by_iso(fixed_iso)
+            country_name = resolved[1] if resolved else None
+        elif country_mode == "auto":
+            country_tuple = detect_country(phone)
+            country_name = country_tuple[1] if country_tuple else None
+        # country_mode == "none" → country_name stays None
 
         report = await generate_demo_report(
             files=files,
@@ -951,8 +944,7 @@ async def _run_demo_batch_safe(
                 "━━━━━━━━━━━━━━━━━━━━\n"
                 "*¿Qué sigue?*\n\n"
                 "📊 Escribe *otro* para probar el otro demo\n"
-                "📅 Escribe *agenda* para reservar una demo con nuestro equipo\n"
-                "💬 Escribe *contacto* para dejar tus datos y que te llamemos"
+                "💬 Escribe *contacto* para dejar tus datos y conversar con nuestro equipo"
             )
             try:
                 await send_message(from_phone, cta_footer, from_number=to_number)

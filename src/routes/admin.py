@@ -2377,3 +2377,69 @@ async def resolve_failed_job(job_row_id: str, user: BackofficeUser = Depends(req
         "resolved_at": datetime.datetime.now(datetime.UTC).isoformat(),
     }).eq("id", job_row_id).execute()
     return {"success": True, "data": {"status": "resolved"}, "error": None}
+
+
+# ── Demo leads (captured from WhatsApp demo `contacto` CTA) ──────
+
+
+class DemoLeadUpdate(BaseModel):
+    status: str | None = None  # new | contacted | resolved | spam
+    notes: str | None = None
+
+
+@router.get("/demo-leads")
+async def list_demo_leads(
+    limit: int = 50,
+    offset: int = 0,
+    status: str | None = None,
+    implementation: str | None = None,
+    user: BackofficeUser = Depends(get_current_user),
+) -> dict:
+    """List demo leads captured from the WhatsApp demo CTA flow.
+
+    Filters: status (new/contacted/resolved/spam), implementation.
+    """
+    client = get_client()
+    query = client.table("demo_leads").select("*", count="exact")
+    if status:
+        query = query.eq("status", status)
+    if implementation:
+        query = query.eq("implementation", implementation)
+    # Non-superadmin users see only leads from their allowed impls
+    if not user.is_superadmin and user.allowed_implementations:
+        query = query.in_("implementation", user.allowed_implementations)
+    query = query.order("created_at", desc=True).range(offset, offset + limit - 1)
+    result = query.execute()
+    total = result.count or 0
+    return {
+        "success": True,
+        "data": result.data or [],
+        "pagination": {"total": total, "limit": limit, "offset": offset, "has_more": offset + limit < total},
+        "error": None,
+    }
+
+
+@router.patch("/demo-leads/{lead_id}")
+async def update_demo_lead(
+    lead_id: str,
+    body: DemoLeadUpdate,
+    user: BackofficeUser = Depends(get_current_user),
+) -> dict:
+    """Update a demo lead — mark as contacted/resolved/spam, add notes."""
+    updates: dict[str, Any] = {}
+    if body.status is not None:
+        if body.status not in ("new", "contacted", "resolved", "spam"):
+            raise HTTPException(status_code=400, detail="Invalid status")
+        updates["status"] = body.status
+        if body.status == "contacted":
+            updates["contacted_at"] = datetime.datetime.now(datetime.UTC).isoformat()
+    if body.notes is not None:
+        updates["notes"] = body.notes
+    if not updates:
+        raise HTTPException(status_code=400, detail="Nothing to update")
+
+    client = get_client()
+    result = client.table("demo_leads").update(updates).eq("id", lead_id).execute()
+    if not result.data:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    return {"success": True, "data": result.data[0], "error": None}

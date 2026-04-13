@@ -38,6 +38,27 @@ _PREFIXES: list[tuple[str, str, str]] = [
 # Longest prefix first so matching stops at the most specific entry.
 _PREFIXES.sort(key=lambda x: -len(x[0]))
 
+# ISO → display name map for reverse lookup and frontend country pickers.
+_ISO_TO_NAME: dict[str, str] = {iso: name for _prefix, iso, name in _PREFIXES}
+
+# Public list of supported countries, alpha-sorted by display name.
+# Frontend uses this to populate the "country fixed" dropdown.
+SUPPORTED_COUNTRIES: list[dict[str, str]] = sorted(
+    [{"iso": iso, "name": name} for iso, name in _ISO_TO_NAME.items()],
+    key=lambda c: c["name"],
+)
+
+
+def country_by_iso(iso: str | None) -> tuple[str, str] | None:
+    """Return (iso, display_name) for an ISO code, or None if unknown."""
+    if not iso:
+        return None
+    key = iso.strip().upper()
+    name = _ISO_TO_NAME.get(key)
+    if name is None:
+        return None
+    return key, name
+
 
 def detect_country(phone: str) -> tuple[str, str] | None:
     """Return (iso_code, display_name) for a phone number, or None if unknown.
