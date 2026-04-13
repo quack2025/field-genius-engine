@@ -85,7 +85,19 @@ async def twilio_webhook(request: Request) -> Response:
     - Body: text message
     - NumMedia: number of media attachments
     - MediaUrl0, MediaContentType0, etc.
+
+    IMPORTANT: always returns 200 with empty TwiML, even on errors.
+    Returning 500 causes Twilio to retry, creating duplicate processing.
     """
+    try:
+        return await _webhook_inner(request)
+    except Exception as e:
+        logger.exception("webhook_top_level_error", error=str(e))
+        twiml = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
+        return Response(content=twiml, media_type="application/xml")
+
+
+async def _webhook_inner(request: Request) -> Response:
     form = await request.form()
     params = {k: str(v) for k, v in form.items()}
 

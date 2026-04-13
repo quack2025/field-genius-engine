@@ -76,12 +76,25 @@ async def download_and_store(
 
     Returns file metadata dict to store in session.raw_files.
     """
-    # Reject unknown content types early
+    # Warn on unknown content types but continue — Twilio/WhatsApp sometimes
+    # sends unusual MIME types (heic, application/octet-stream, etc). We'd
+    # rather accept + log than reject the user's photo.
     if content_type not in MIME_TO_EXT:
-        raise ValueError(f"Unsupported content type: {content_type}")
-
-    ext = MIME_TO_EXT[content_type]
-    media_type = MIME_TO_TYPE[content_type]
+        logger.warning("media_unknown_content_type", content_type=content_type)
+        # Fallback: try to infer from URL or default to image/jpeg
+        if "image" in content_type.lower() or content_type == "application/octet-stream":
+            content_type_effective = "image/jpeg"
+        elif "audio" in content_type.lower():
+            content_type_effective = "audio/ogg"
+        elif "video" in content_type.lower():
+            content_type_effective = "video/mp4"
+        else:
+            content_type_effective = "image/jpeg"
+        ext = MIME_TO_EXT[content_type_effective]
+        media_type = MIME_TO_TYPE[content_type_effective]
+    else:
+        ext = MIME_TO_EXT[content_type]
+        media_type = MIME_TO_TYPE[content_type]
     file_id = str(uuid.uuid4())[:8]
     filename = f"{file_id}{ext}"
     storage_path = f"{session_id}/{filename}"
@@ -130,10 +143,15 @@ async def download_and_store(
             logger.warning("media_too_large", size=len(file_bytes), max=MAX_FILE_SIZE)
             raise ValueError(f"File too large: {len(file_bytes)} bytes (max {MAX_FILE_SIZE})")
 
-        # Validate magic bytes match claimed content type
-        if not _validate_magic_bytes(file_bytes, content_type):
-            logger.warning("media_magic_bytes_mismatch", claimed=content_type, size=len(file_bytes))
-            raise ValueError(f"File content does not match claimed type {content_type}")
+        # Validate magic bytes match claimed content type (warn but don't reject —
+        # WhatsApp/Twilio sometimes sends unusual formats we'd rather accept)
+        if content_type in MAGIC_BYTES and not _validate_magic_bytes(file_bytes, content_type):
+            logger.warning(
+                "media_magic_bytes_mismatch",
+                claimed=content_type,
+                size=len(file_bytes),
+                first_bytes=file_bytes[:8].hex() if len(file_bytes) >= 8 else "",
+            )
 
         # Upload to Supabase Storage (async via thread)
         client = get_client()
