@@ -621,7 +621,10 @@ async def get_session_detail(session_id: str, user: BackofficeUser = Depends(get
     session_data = session.data
 
     # Generate signed URLs for media files (bucket is private)
-    raw_files = session_data.get("raw_files") or []
+    # Defensive: raw_files is a JSONB array that historically has contained
+    # mixed shapes (dicts, strings from legacy code). Filter to dicts first.
+    raw_files_raw = session_data.get("raw_files") or []
+    raw_files = [f for f in raw_files_raw if isinstance(f, dict)]
     paths_to_sign = [f["storage_path"] for f in raw_files if f.get("storage_path")]
     if paths_to_sign:
         try:
@@ -640,6 +643,9 @@ async def get_session_detail(session_id: str, user: BackofficeUser = Depends(get
                 sp = f.get("storage_path")
                 if sp:
                     f["public_url"] = f"{settings.supabase_url}/storage/v1/object/public/media/{sp}"
+    # Replace the original raw_files with the filtered one so the UI doesn't
+    # receive malformed entries either.
+    session_data["raw_files"] = raw_files
 
     # Fetch visit reports for this session
     reports = (
