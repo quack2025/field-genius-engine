@@ -438,10 +438,12 @@ async def _webhook_inner(request: Request) -> Response:
                 if impl_config else "explicit"
             )
 
-            # Demo+explicit: enforce caps BEFORE download to save bandwidth/storage.
-            # Infer type from content_type (before the actual file_meta is built).
-            prior_n_images = 0
-            prior_n_audios = 0
+            # Demo+explicit: apply a high safety cap to prevent abuse, but let
+            # users keep sending photos freely. The actual analysis uses the
+            # most recent MAX_IMAGES_PER_BATCH (soft cap), with messaging in
+            # the ack so the user knows.
+            ABUSE_CAP_IMAGES = 30
+            ABUSE_CAP_AUDIOS = 10
             if demo_mode and batch_mode == "explicit":
                 supported, inferred_type = is_supported_media(content_type)
                 if supported and inferred_type in ("image", "audio"):
@@ -450,27 +452,26 @@ async def _webhook_inner(request: Request) -> Response:
                         prior_n_images = sum(1 for f in existing if f.get("type") == "image")
                         prior_n_audios = sum(1 for f in existing if f.get("type") == "audio")
                     except Exception:
-                        pass
+                        prior_n_images = 0
+                        prior_n_audios = 0
 
-                    if inferred_type == "image" and prior_n_images >= MAX_IMAGES_PER_BATCH:
+                    if inferred_type == "image" and prior_n_images >= ABUSE_CAP_IMAGES:
                         await send_message(
                             from_phone,
-                            f"Este demo ya recibió el máximo de *{MAX_IMAGES_PER_BATCH} fotos* por análisis 📸\n\n"
-                            f"Escribe *generar* para ver el reporte consolidado, o *otro* para empezar un demo nuevo.\n\n"
-                            f"_En la versión completa de Radar Xponencial no hay este límite — manejamos cientos de fotos por usuario al día._",
+                            f"Ya recibí {prior_n_images} fotos 😅 — es mucho material.\n\n"
+                            f"Escribe *generar* para analizar las *{MAX_IMAGES_PER_BATCH} más recientes*, o *otro* para empezar un demo nuevo.",
                             from_number=to_number,
                         )
-                        logger.info("demo_cap_rejected", phone=phone, type="image", current=prior_n_images)
+                        logger.info("demo_abuse_cap_rejected", phone=phone, type="image", current=prior_n_images)
                         continue
-                    if inferred_type == "audio" and prior_n_audios >= MAX_AUDIOS_PER_BATCH:
+                    if inferred_type == "audio" and prior_n_audios >= ABUSE_CAP_AUDIOS:
                         await send_message(
                             from_phone,
-                            f"Este demo ya recibió el máximo de *{MAX_AUDIOS_PER_BATCH} audios* por análisis 🎤\n\n"
-                            f"Escribe *generar* para ver el reporte.\n\n"
-                            f"_En la versión completa no hay este límite._",
+                            f"Ya recibí {prior_n_audios} audios 😅 — suficiente.\n\n"
+                            f"Escribe *generar* para analizar los *{MAX_AUDIOS_PER_BATCH} más recientes*.",
                             from_number=to_number,
                         )
-                        logger.info("demo_cap_rejected", phone=phone, type="audio", current=prior_n_audios)
+                        logger.info("demo_abuse_cap_rejected", phone=phone, type="audio", current=prior_n_audios)
                         continue
 
             # Download media and upload to Supabase Storage
@@ -526,34 +527,42 @@ async def _webhook_inner(request: Request) -> Response:
                     "audio": "audio 🎤",
                     "video": "video 🎬",
                 }.get(ftype, "archivo")
-                # Count only demo-relevant files accumulated today
+                # Count files accumulated today (post-add)
                 try:
                     all_files = await get_session_files(session["id"])
+                    total_images = sum(1 for f in all_files if f.get("type") == "image")
+                    total_audios = sum(1 for f in all_files if f.get("type") == "audio")
                     total = sum(1 for f in all_files if f.get("type") in ("image", "audio", "video"))
                 except Exception:
+                    total_images = 1 if ftype == "image" else 0
+                    total_audios = 1 if ftype == "audio" else 0
                     total = 1
 
-                # Detect if this file just brought us AT the cap (not over)
-                just_hit_image_cap = ftype == "image" and (prior_n_images + 1) == MAX_IMAGES_PER_BATCH
-                just_hit_audio_cap = ftype == "audio" and (prior_n_audios + 1) == MAX_AUDIOS_PER_BATCH
+                base = f"Recibí tu {label} ({total} archivo{'s' if total != 1 else ''})."
 
-                if just_hit_image_cap:
+                # Soft-cap messaging: over the analysis limit but not blocked
+                if ftype == "image" and total_images > MAX_IMAGES_PER_BATCH:
                     ack = (
-                        f"Recibí tu {label} ({total} archivo{'s' if total != 1 else ''}).\n\n"
-                        f"⚠️ Este demo analiza hasta *{MAX_IMAGES_PER_BATCH} fotos* por reporte. "
-                        f"Escribe *generar* ahora para ver el análisis consolidado.\n\n"
-                        f"_En la versión completa de Radar Xponencial no hay este límite — manejamos cientos de fotos por usuario al día._"
+                        f"{base}\n\n"
+                        f"📸 El demo analiza las *{MAX_IMAGES_PER_BATCH} fotos más recientes* al escribir *generar*. "
+                        f"Tienes {total_images} en total, así que el reporte usará las últimas {MAX_IMAGES_PER_BATCH}.\n\n"
+                        f"_En la versión completa de Radar Xponencial analizamos cientos de fotos por usuario al día._"
                     )
-                elif just_hit_audio_cap:
+                elif ftype == "image" and total_images == MAX_IMAGES_PER_BATCH:
                     ack = (
-                        f"Recibí tu {label} ({total} archivo{'s' if total != 1 else ''}).\n\n"
-                        f"⚠️ Llegaste al máximo de *{MAX_AUDIOS_PER_BATCH} audios* para este demo. "
-                        f"Escribe *generar* para ver el análisis.\n\n"
-                        f"_En la versión completa no hay este límite._"
+                        f"{base}\n\n"
+                        f"✅ Llegaste a *{MAX_IMAGES_PER_BATCH} fotos* — el tope del demo para un reporte. "
+                        f"Puedes enviar más si quieres, pero solo las *{MAX_IMAGES_PER_BATCH} más recientes* se incluirán en el análisis. "
+                        f"Escribe *generar* cuando estés listo."
+                    )
+                elif ftype == "audio" and total_audios > MAX_AUDIOS_PER_BATCH:
+                    ack = (
+                        f"{base}\n\n"
+                        f"🎤 El demo usa los *{MAX_AUDIOS_PER_BATCH} audios más recientes*. Envía más fotos o escribe *generar* cuando termines."
                     )
                 else:
                     ack = (
-                        f"Recibí tu {label} ({total} archivo{'s' if total != 1 else ''}).\n\n"
+                        f"{base}\n\n"
                         f"Envía más si quieres o escribe *generar* cuando termines para ver el análisis."
                     )
                 await send_message(from_phone, ack, from_number=to_number)
