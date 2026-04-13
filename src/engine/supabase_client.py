@@ -208,10 +208,12 @@ async def get_session_files(session_id: str) -> list[dict[str, Any]]:
             .order("created_at")
             .execute()
         )
-        if result.data:
+        if result and result.data:
             return result.data
         # Fallback to JSONB
         session = client.table("sessions").select("raw_files").eq("id", session_id).maybe_single().execute()
+        if session is None or not getattr(session, "data", None):
+            return []
         return (session.data or {}).get("raw_files") or []
 
     try:
@@ -222,6 +224,8 @@ async def get_session_files(session_id: str) -> list[dict[str, Any]]:
         def _fallback():
             client = get_client()
             session = client.table("sessions").select("raw_files").eq("id", session_id).maybe_single().execute()
+            if session is None or not getattr(session, "data", None):
+                return []
             return (session.data or {}).get("raw_files") or []
         return await _run(_fallback)
 
@@ -232,7 +236,9 @@ async def get_session(session_id: str) -> dict[str, Any] | None:
     def _sync():
         client = get_client()
         result = client.table("sessions").select("*").eq("id", session_id).maybe_single().execute()
-        return result.data
+        if result is None:
+            return None
+        return getattr(result, "data", None)
     return await _run(_sync)
 
 
@@ -263,15 +269,22 @@ async def get_implementation_by_whatsapp_number(whatsapp_number: str) -> str | N
     """
     def _sync():
         client = get_client()
-        result = (
-            client.table("implementations")
-            .select("id")
-            .eq("whatsapp_number", whatsapp_number)
-            .eq("status", "active")
-            .maybe_single()
-            .execute()
-        )
-        return result.data["id"] if result.data else None
+        try:
+            result = (
+                client.table("implementations")
+                .select("id")
+                .eq("whatsapp_number", whatsapp_number)
+                .eq("status", "active")
+                .maybe_single()
+                .execute()
+            )
+        except Exception as e:
+            logger.warning("impl_by_number_query_failed", error=str(e))
+            return None
+        # supabase-py returns None (not an object) when no rows match maybe_single()
+        if result is None or not getattr(result, "data", None):
+            return None
+        return result.data.get("id")
     return await _run(_sync)
 
 
