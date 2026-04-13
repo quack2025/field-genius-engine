@@ -428,16 +428,35 @@ async def _webhook_inner(request: Request) -> Response:
             # Add file to session
             await handle_media(phone, file_meta)
 
-            # QW4: Acknowledge receipt with file count
-            file_count = len(session.get("raw_files", [])) + 1
-            # Use configurable hint message
-            hint_template = (impl_config.onboarding_config.get("first_photo_hint") if impl_config else None) or "Recibido ({count} archivo(s) hoy). Escribe *reporte* cuando termines."
-            await send_message(from_phone, hint_template.replace("{count}", str(file_count)))
-
-            # Pre-process in background via queue (or inline fallback)
+            # Pre-process in background via queue (content safety + vision description)
             impl_id = session.get("implementation", settings.default_implementation)
             from src.engine.worker import enqueue_preprocess
             await enqueue_preprocess(session["id"], file_meta, implementation=impl_id)
+
+            # Demo instant mode: single photo → inline report, no trigger word needed
+            demo_mode = bool(impl_config and impl_config.onboarding_config.get("demo_mode"))
+            is_image = file_meta.get("type") == "image"
+            if demo_mode and is_image:
+                await send_message(
+                    from_phone,
+                    "Recibí tu foto 📸\nAnalizando con múltiples modelos de IA… te envío el reporte en unos segundos 🔍",
+                    from_number=to_number,
+                )
+                asyncio.create_task(
+                    _run_demo_analysis_safe(
+                        session_id=session["id"],
+                        file_meta=file_meta,
+                        impl_config=impl_config,
+                        phone=phone,
+                        from_phone=from_phone,
+                        to_number=to_number,
+                    )
+                )
+            else:
+                # Field-agent flow: accumulate and wait for "reporte" trigger word
+                file_count = len(session.get("raw_files", [])) + 1
+                hint_template = (impl_config.onboarding_config.get("first_photo_hint") if impl_config else None) or "Recibido ({count} archivo(s) hoy). Escribe *reporte* cuando termines."
+                await send_message(from_phone, hint_template.replace("{count}", str(file_count)))
 
         except Exception as e:
             logger.error("media_processing_failed", phone=phone, error=str(e))
@@ -537,6 +556,66 @@ async def _run_pipeline_safe(session_id: str, reply_phone: str) -> None:
         logger.error("pipeline_background_failed", session_id=session_id, error=str(e))
         try:
             await send_message(reply_phone, "Hubo un error generando tu reporte. Intenta de nuevo con *reporte*.")
+        except Exception:
+            pass
+
+
+async def _run_demo_analysis_safe(
+    session_id: str,
+    file_meta: dict,
+    impl_config,
+    phone: str,
+    from_phone: str,
+    to_number: str,
+) -> None:
+    """Run demo instant analysis in background and send the report via WhatsApp.
+
+    Uses tiered Haiku vision + Haiku synthesis. ~10-20s total. Caught errors
+    send a friendly fallback message and log the failure.
+    """
+    try:
+        from src.engine.demo_analyzer import generate_single_photo_demo_report
+        from src.engine.phone_geo import detect_country
+
+        country_tuple = detect_country(phone)
+        country_name = country_tuple[1] if country_tuple else None
+
+        storage_path = file_meta.get("storage_path")
+        if not storage_path:
+            raise RuntimeError("missing_storage_path")
+
+        report = await generate_single_photo_demo_report(
+            storage_path=storage_path,
+            impl_config=impl_config,
+            country_name=country_name,
+            audio_context=None,
+            location_hint=None,
+        )
+
+        await send_message(from_phone, report, from_number=to_number)
+        logger.info(
+            "demo_analysis_delivered",
+            phone=phone,
+            impl=impl_config.id,
+            session_id=session_id[:8],
+            country=country_name,
+        )
+    except Exception as e:
+        logger.error(
+            "demo_analysis_failed",
+            phone=phone,
+            impl=getattr(impl_config, "id", "?"),
+            session_id=session_id[:8],
+            error=str(e)[:200],
+        )
+        try:
+            await send_message(
+                from_phone,
+                "No pude analizar esta foto en este momento 😔. "
+                "Intenta con otra imagen del punto de venta o publicidad. "
+                "Si el problema persiste, escribe *menu* para ver otras opciones.",
+                from_number=to_number,
+            )
         except Exception:
             pass
 
