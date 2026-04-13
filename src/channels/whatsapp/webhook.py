@@ -172,7 +172,12 @@ async def twilio_webhook(request: Request) -> Response:
                         else:
                             await update_user_implementation(phone, matched_impl)
                             await update_session_implementation_today(phone, matched_impl)
-                        ack_msg = f"Cambiado a *{target_config.name}*. Envia una foto o describe tu caso para analizar."
+                        # Use configurable post_switch_message if set, fallback to generic ACK
+                        target_onboarding = target_config.onboarding_config or {}
+                        ack_msg = target_onboarding.get(
+                            "post_switch_message",
+                            f"Cambiado a *{target_config.name}*. Envia una foto o describe tu caso para analizar.",
+                        )
                         await send_message(from_phone, ack_msg, from_number=to_number)
                         logger.info(
                             "demo_keyword_switched",

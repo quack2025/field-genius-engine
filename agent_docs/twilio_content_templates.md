@@ -21,10 +21,11 @@ Radar Xponencial sends interactive messages (quick-reply buttons, list pickers) 
    - **Language:** `es_MX` (or `es`)
    - **Channel:** WhatsApp
    - **Content type:** **Quick Reply**
-4. Body:
+4. Body (copy exactly — este texto está optimizado para UX):
    ```
-   Bienvenido a *Radar Xponencial*.
-   Este número ofrece demos de nuestra plataforma de inteligencia de campo con IA.
+   Hola! Soy *Radar* de Xponencial 🎯
+
+   Convertimos fotos de campo (góndolas, exhibiciones, competencia) en reportes estratégicos con inteligencia artificial — en segundos, sin formularios.
 
    ¿Qué demo te gustaría ver?
    ```
