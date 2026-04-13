@@ -274,20 +274,15 @@ async def twilio_webhook(request: Request) -> Response:
                     twiml = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
                     return Response(content=twiml, media_type="application/xml")
                 else:
-                    welcome = onboarding.get(
-                        "welcome_message",
-                        "Bienvenido a Radar Xponencial! Para continuar, responde *acepto*.",
-                    )
-                    await send_message(from_phone, welcome, from_number=to_number)
+                    await _send_welcome(onboarding, from_phone, to_number)
                     logger.info("user_onboarding_sent", phone=phone, impl=resolved_impl)
                     twiml = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
                     return Response(content=twiml, media_type="application/xml")
 
             # Step 5: First contact for open-mode users (no terms, just welcome)
             if not user and impl_config.access_mode == "open":
-                welcome = onboarding.get("welcome_message")
-                if welcome:
-                    await send_message(from_phone, welcome, from_number=to_number)
+                if onboarding.get("welcome_message") or onboarding.get("welcome_content_sid"):
+                    await _send_welcome(onboarding, from_phone, to_number)
 
         except Exception as e:
             logger.error("access_check_failed", phone=phone, error=str(e))
@@ -414,6 +409,40 @@ async def twilio_webhook(request: Request) -> Response:
     # Return empty TwiML response immediately (Twilio expects XML within 15s)
     twiml = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
     return Response(content=twiml, media_type="application/xml")
+
+
+async def _send_welcome(
+    onboarding_config: dict,
+    to_phone: str,
+    from_number: str,
+) -> None:
+    """Send the welcome message: interactive content template if configured, else plain text.
+
+    If `onboarding_config.welcome_content_sid` is set, use Twilio Content API
+    (interactive buttons, list picker, etc). Falls back to `welcome_message` text
+    if the template fails or isn't configured.
+    """
+    content_sid = onboarding_config.get("welcome_content_sid")
+    welcome_text = onboarding_config.get(
+        "welcome_message",
+        "Bienvenido a Radar Xponencial!",
+    )
+
+    if content_sid:
+        from src.channels.whatsapp.sender import send_content_template
+        content_vars = onboarding_config.get("welcome_content_variables")
+        sid = await send_content_template(
+            to_phone,
+            content_sid,
+            content_variables=content_vars,
+            from_number=from_number,
+        )
+        if sid:
+            return
+        # Template failed — fall back to text
+        logger.warning("welcome_content_fallback_to_text", content_sid=content_sid)
+
+    await send_message(to_phone, welcome_text, from_number=from_number)
 
 
 async def _run_pipeline_safe(session_id: str, reply_phone: str) -> None:

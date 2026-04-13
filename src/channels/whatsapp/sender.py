@@ -108,6 +108,56 @@ def _split_message(text: str, max_chars: int) -> list[str]:
     return chunks
 
 
+async def send_content_template(
+    to_phone: str,
+    content_sid: str,
+    content_variables: dict | None = None,
+    from_number: str | None = None,
+) -> str | None:
+    """Send a Twilio Content Template (interactive message: buttons, list, etc).
+
+    Use for quick-reply buttons, list pickers, cards, etc. The template must be
+    pre-created in Twilio Console (Content Editor) or via Content API.
+
+    Works within the 24h customer service window without requiring Meta approval.
+
+    Args:
+        to_phone: WhatsApp number (with or without 'whatsapp:' prefix)
+        content_sid: Twilio Content SID (e.g., 'HXxxxxxxxxxxxxxxxxxxxxxxxxxxx')
+        content_variables: Optional dict of template variables, e.g., {"1": "Jorge"}
+        from_number: Override the default sender number
+
+    Returns:
+        Message SID on success, None on failure.
+    """
+    import json
+    try:
+        client = get_twilio_client()
+        to_whatsapp = f"whatsapp:{to_phone}" if not to_phone.startswith("whatsapp:") else to_phone
+        from_whatsapp = from_number or await _resolve_from_number(to_phone)
+
+        kwargs: dict = {
+            "from_": from_whatsapp,
+            "to": to_whatsapp,
+            "content_sid": content_sid,
+        }
+        if content_variables:
+            kwargs["content_variables"] = json.dumps(content_variables)
+
+        message = client.messages.create(**kwargs)
+        logger.info(
+            "content_template_sent",
+            to=to_phone,
+            sid=message.sid,
+            content_sid=content_sid,
+        )
+        return message.sid
+
+    except Exception as e:
+        logger.error("content_template_send_failed", to=to_phone, content_sid=content_sid, error=str(e))
+        return None
+
+
 async def send_media(to_phone: str, body: str, media_url: str, from_number: str | None = None) -> str | None:
     """Send a WhatsApp message with media attachment via Twilio."""
     try:
