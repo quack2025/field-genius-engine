@@ -246,7 +246,7 @@ async def upsert_user(
     phone: str,
     implementation: str,
     name: str | None = None,
-    role: str = "demo_visitor",
+    role: str = "field_agent",
 ) -> dict[str, Any]:
     """Create or update a user row. Used when a visitor chooses a demo via keyword
     so their implementation choice persists across messages.
