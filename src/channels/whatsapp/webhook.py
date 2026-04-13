@@ -40,6 +40,12 @@ ACCEPT_KEYWORDS = {"acepto", "accept", "si", "sí", "ok", "acepta", "de acuerdo"
 # Keywords that decline T&C (text or button title)
 DECLINE_KEYWORDS = {"no acepto", "no", "decline", "rechazo", "cancelar"}
 
+# Keywords that trigger demo batch analysis (only when impl is in demo_mode)
+DEMO_TRIGGER_KEYWORDS = {
+    "generar", "generar reporte", "reporte", "listo", "ya",
+    "analizar", "analiza", "fin", "terminé", "termine", "done",
+}
+
 
 def _is_duplicate(message_sid: str) -> bool:
     """Check if MessageSid was already processed. Thread-safe for single process."""
@@ -433,10 +439,16 @@ async def _webhook_inner(request: Request) -> Response:
             from src.engine.worker import enqueue_preprocess
             await enqueue_preprocess(session["id"], file_meta, implementation=impl_id)
 
-            # Demo instant mode: single photo → inline report, no trigger word needed
+            # Demo mode routing (per-impl via onboarding_config.demo_batch_mode)
             demo_mode = bool(impl_config and impl_config.onboarding_config.get("demo_mode"))
-            is_image = file_meta.get("type") == "image"
-            if demo_mode and is_image:
+            batch_mode = (
+                impl_config.onboarding_config.get("demo_batch_mode", "explicit")
+                if impl_config else "explicit"
+            )
+            ftype = file_meta.get("type")
+
+            if demo_mode and batch_mode == "instant" and ftype == "image":
+                # Legacy: single-photo → inline report
                 await send_message(
                     from_phone,
                     "Recibí tu foto 📸\nAnalizando con múltiples modelos de IA… te envío el reporte en unos segundos 🔍",
@@ -452,6 +464,25 @@ async def _webhook_inner(request: Request) -> Response:
                         to_number=to_number,
                     )
                 )
+            elif demo_mode and batch_mode == "explicit":
+                # Batch mode: ack receipt, wait for explicit trigger keyword
+                label = {
+                    "image": "foto 📸",
+                    "audio": "audio 🎤",
+                    "video": "video 🎬",
+                }.get(ftype, "archivo")
+                # Count only demo-relevant files accumulated today
+                from src.engine.supabase_client import get_session_files
+                try:
+                    all_files = await get_session_files(session["id"])
+                    total = sum(1 for f in all_files if f.get("type") in ("image", "audio", "video"))
+                except Exception:
+                    total = 1
+                ack = (
+                    f"Recibí tu {label} ({total} archivo{'s' if total != 1 else ''}).\n\n"
+                    f"Envía más si quieres o escribe *generar* cuando termines para ver el análisis."
+                )
+                await send_message(from_phone, ack, from_number=to_number)
             else:
                 # Field-agent flow: accumulate and wait for "reporte" trigger word
                 file_count = len(session.get("raw_files", [])) + 1
@@ -478,6 +509,34 @@ async def _webhook_inner(request: Request) -> Response:
         menu_selection = await handle_menu_selection(phone, body)
         if menu_selection:
             await send_message(from_phone, menu_selection["message"])
+            twiml = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
+            return Response(content=twiml, media_type="application/xml")
+
+        # Demo mode trigger: if impl is in demo_mode and user types a trigger keyword,
+        # gather today's session files and generate a consolidated report.
+        if (
+            impl_config
+            and impl_config.onboarding_config.get("demo_mode")
+            and body_lower in DEMO_TRIGGER_KEYWORDS
+        ):
+            import datetime as _dt
+            from src.engine.supabase_client import get_or_create_session
+            session = await get_or_create_session(phone, _dt.date.today(), resolved_impl)
+            await send_message(
+                from_phone,
+                "Generando análisis de todo lo que enviaste… 🔍\nTe envío el reporte en unos segundos.",
+                from_number=to_number,
+            )
+            asyncio.create_task(
+                _run_demo_batch_safe(
+                    session_id=session["id"],
+                    impl_config=impl_config,
+                    phone=phone,
+                    from_phone=from_phone,
+                    to_number=to_number,
+                )
+            )
+            logger.info("demo_batch_triggered", phone=phone, impl=impl_config.id, session_id=session["id"][:8])
             twiml = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
             return Response(content=twiml, media_type="application/xml")
 
@@ -614,6 +673,77 @@ async def _run_demo_analysis_safe(
                 "No pude analizar esta foto en este momento 😔. "
                 "Intenta con otra imagen del punto de venta o publicidad. "
                 "Si el problema persiste, escribe *menu* para ver otras opciones.",
+                from_number=to_number,
+            )
+        except Exception:
+            pass
+
+
+async def _run_demo_batch_safe(
+    session_id: str,
+    impl_config,
+    phone: str,
+    from_phone: str,
+    to_number: str,
+) -> None:
+    """Run consolidated demo batch analysis on all files in today's session.
+
+    Triggered when user types a demo trigger keyword ("generar", "reporte", etc).
+    Reads all session_files, runs parallel vision + audio transcription,
+    synthesizes one WhatsApp report, and sends it back.
+    """
+    try:
+        from src.engine.demo_analyzer import generate_demo_report
+        from src.engine.phone_geo import detect_country
+        from src.engine.supabase_client import get_session_files
+
+        files = await get_session_files(session_id)
+        images = [f for f in files if f.get("type") == "image" and f.get("storage_path")]
+
+        if not images:
+            await send_message(
+                from_phone,
+                "Aún no recibí ninguna foto 🤔\n\n"
+                "Envíame al menos una imagen (góndola, anaquel, publicidad, punto de venta) y luego escribe *generar*.",
+                from_number=to_number,
+            )
+            logger.info("demo_batch_no_images", phone=phone, session_id=session_id[:8])
+            return
+
+        country_tuple = detect_country(phone)
+        country_name = country_tuple[1] if country_tuple else None
+
+        report = await generate_demo_report(
+            files=files,
+            impl_config=impl_config,
+            country_name=country_name,
+            location_hint=None,
+            text_context=None,
+        )
+
+        await send_message(from_phone, report, from_number=to_number)
+        logger.info(
+            "demo_batch_delivered",
+            phone=phone,
+            impl=impl_config.id,
+            session_id=session_id[:8],
+            country=country_name,
+            total_files=len(files),
+            images=len(images),
+        )
+    except Exception as e:
+        logger.error(
+            "demo_batch_failed",
+            phone=phone,
+            impl=getattr(impl_config, "id", "?"),
+            session_id=session_id[:8],
+            error=str(e)[:200],
+        )
+        try:
+            await send_message(
+                from_phone,
+                "No pude generar el análisis en este momento 😔\n\n"
+                "Intenta enviar las fotos de nuevo o escribe *menu* para ver otras opciones.",
                 from_number=to_number,
             )
         except Exception:
