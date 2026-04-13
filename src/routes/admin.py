@@ -73,6 +73,8 @@ class ImplementationUpdate(BaseModel):
     vision_strategy: str | None = None
     onboarding_config: dict[str, Any] | None = None
     folder: str | None = None
+    demo_keywords: list[str] | None = None
+    fallback_implementation: str | None = None
 
 
 class VisitTypeCreate(BaseModel):
@@ -172,7 +174,7 @@ async def update_implementation(impl_id: str, body: ImplementationUpdate, user: 
         raise HTTPException(status_code=403, detail="Access denied")
     client = get_client()
     # Allow explicit null for nullable fields (e.g., removing from folder)
-    nullable_fields = {"folder", "whatsapp_number", "google_spreadsheet_id"}
+    nullable_fields = {"folder", "whatsapp_number", "google_spreadsheet_id", "fallback_implementation"}
     updates = {}
     for k, v in body.model_dump().items():
         if v is not None:
@@ -181,6 +183,46 @@ async def update_implementation(impl_id: str, body: ImplementationUpdate, user: 
             updates[k] = None
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")
+
+    # Normalize demo_keywords: trim, lowercase, dedupe, reject reserved
+    if "demo_keywords" in updates and updates["demo_keywords"] is not None:
+        from src.engine.config_loader import RESERVED_KEYWORDS
+        cleaned: list[str] = []
+        seen: set[str] = set()
+        for kw in updates["demo_keywords"]:
+            if not isinstance(kw, str):
+                continue
+            norm = kw.strip().lower()
+            if not norm or norm in seen:
+                continue
+            if norm in RESERVED_KEYWORDS:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Keyword '{norm}' is reserved (menu keywords)",
+                )
+            seen.add(norm)
+            cleaned.append(norm)
+        updates["demo_keywords"] = cleaned
+
+    # Validate fallback_implementation points to an existing active impl
+    if updates.get("fallback_implementation"):
+        fb_check = (
+            client.table("implementations")
+            .select("id, status")
+            .eq("id", updates["fallback_implementation"])
+            .maybe_single()
+            .execute()
+        )
+        if not fb_check or not fb_check.data:
+            raise HTTPException(
+                status_code=400,
+                detail=f"fallback_implementation '{updates['fallback_implementation']}' does not exist",
+            )
+        if fb_check.data.get("status") != "active":
+            raise HTTPException(
+                status_code=400,
+                detail=f"fallback_implementation '{updates['fallback_implementation']}' is not active",
+            )
 
     updates["updated_at"] = datetime.datetime.now(datetime.UTC).isoformat()
 
@@ -193,11 +235,15 @@ async def update_implementation(impl_id: str, body: ImplementationUpdate, user: 
         )
         if not result.data:
             raise HTTPException(status_code=404, detail=f"Implementation '{impl_id}' not found")
+        # Invalidate caches so keyword index rebuilds on next lookup
+        from src.engine.config_loader import reload as reload_config
+        await reload_config(impl_id)
         logger.info("implementation_updated", id=impl_id, fields=list(updates.keys()))
         return {"success": True, "data": result.data[0], "error": None}
     except HTTPException:
         raise
     except Exception as e:
+        logger.error("implementation_update_failed", id=impl_id, error=str(e))
         raise HTTPException(status_code=400, detail="Invalid request")
 
 

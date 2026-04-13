@@ -136,38 +136,129 @@ async def twilio_webhook(request: Request) -> Response:
         resolved_impl=resolved_impl,
     )
 
-    # ── Access control + Onboarding flow ──
+    # ── Access control + Keyword routing + Onboarding flow ──
     impl_config = None
     user = None
     if resolved_impl:
         try:
-            from src.engine.config_loader import get_implementation
+            from src.engine.config_loader import get_implementation, get_impl_by_keyword
             from src.engine.supabase_client import get_user_by_phone
-            impl_config = await get_implementation(resolved_impl)
+
+            # Step 0: Read user early (needed by keyword + sticky logic)
             user = await get_user_by_phone(phone)
+
+            # Step 1: Keyword override — strongest signal
+            # If the first token of the body matches any implementation's demo_keywords,
+            # switch the user to that impl, persist it, send ACK, and return early.
+            if body and body.strip():
+                first_token = body.strip().lower().split()[0]
+                matched_impl = await get_impl_by_keyword(first_token)
+                if matched_impl and matched_impl != resolved_impl:
+                    try:
+                        target_config = await get_implementation(matched_impl)
+                    except Exception:
+                        target_config = None
+                    if target_config and target_config.access_mode == "open":
+                        from src.engine.supabase_client import (
+                            update_user_implementation,
+                            update_session_implementation_today,
+                        )
+                        # Create user if needed (first contact via keyword)
+                        if not user:
+                            # get_or_create_session creates user implicitly; call it with impl override
+                            import datetime as _dt
+                            from src.engine.supabase_client import get_or_create_session as _goc
+                            await _goc(phone, _dt.date.today(), matched_impl)
+                        else:
+                            await update_user_implementation(phone, matched_impl)
+                            await update_session_implementation_today(phone, matched_impl)
+                        ack_msg = f"Cambiado a *{target_config.name}*. Envia una foto o describe tu caso para analizar."
+                        await send_message(from_phone, ack_msg, from_number=to_number)
+                        logger.info(
+                            "demo_keyword_switched",
+                            phone=phone,
+                            from_impl=resolved_impl,
+                            to_impl=matched_impl,
+                        )
+                        twiml = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
+                        return Response(content=twiml, media_type="application/xml")
+
+            impl_config = await get_implementation(resolved_impl)
             onboarding = impl_config.onboarding_config
 
-            # Step 1: Whitelist check — reject unknown users
+            # Step 2: Whitelist check with fallback
             if impl_config.access_mode == "whitelist":
-                if not user or user.get("implementation") != resolved_impl:
-                    rejection = onboarding.get(
-                        "rejection_message",
-                        "No tienes acceso a este servicio. Contacta a tu administrador.",
-                    )
-                    logger.warning("webhook_access_denied", phone=phone, impl=resolved_impl)
-                    # Send rejection from the implementation's number
-                    from_num = impl_config.whatsapp_number or settings.twilio_whatsapp_number
-                    sid = await send_message(from_phone, rejection, from_number=from_num)
-                    logger.info("rejection_message_result", sid=sid, from_num=from_num, to=from_phone)
-                    twiml = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
-                    return Response(content=twiml, media_type="application/xml")
+                user_is_whitelisted = (
+                    user is not None
+                    and user.get("implementation") == resolved_impl
+                )
+                if not user_is_whitelisted:
+                    # Try fallback_implementation before rejecting
+                    fallback = impl_config.fallback_implementation
+                    if fallback:
+                        try:
+                            fb_config = await get_implementation(fallback)
+                        except Exception:
+                            fb_config = None
+                        if fb_config and fb_config.access_mode == "open":
+                            logger.info(
+                                "whitelist_fallback_activated",
+                                phone=phone,
+                                from_impl=resolved_impl,
+                                to_impl=fallback,
+                            )
+                            resolved_impl = fallback
+                            impl_config = fb_config
+                            onboarding = impl_config.onboarding_config
+                        else:
+                            logger.warning(
+                                "whitelist_fallback_invalid",
+                                phone=phone,
+                                fallback=fallback,
+                            )
+                            rejection = onboarding.get(
+                                "rejection_message",
+                                "No tienes acceso a este servicio. Contacta a tu administrador.",
+                            )
+                            logger.warning("webhook_access_denied", phone=phone, impl=resolved_impl)
+                            sid = await send_message(from_phone, rejection, from_number=to_number)
+                            logger.info("rejection_message_result", sid=sid, to=from_phone)
+                            twiml = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
+                            return Response(content=twiml, media_type="application/xml")
+                    else:
+                        rejection = onboarding.get(
+                            "rejection_message",
+                            "No tienes acceso a este servicio. Contacta a tu administrador.",
+                        )
+                        logger.warning("webhook_access_denied", phone=phone, impl=resolved_impl)
+                        sid = await send_message(from_phone, rejection, from_number=to_number)
+                        logger.info("rejection_message_result", sid=sid, to=from_phone)
+                        twiml = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
+                        return Response(content=twiml, media_type="application/xml")
 
-            # Step 2: Terms acceptance check
+            # Step 3: Sticky switching — if user already belongs to an OPEN demo impl
+            # (different from resolved), respect their persistent choice
+            if user and user.get("implementation") and user["implementation"] != resolved_impl:
+                try:
+                    user_config = await get_implementation(user["implementation"])
+                    if user_config.access_mode == "open":
+                        logger.info(
+                            "sticky_user_impl",
+                            phone=phone,
+                            from_impl=resolved_impl,
+                            to_impl=user["implementation"],
+                        )
+                        resolved_impl = user["implementation"]
+                        impl_config = user_config
+                        onboarding = impl_config.onboarding_config
+                except Exception:
+                    pass  # user's impl doesn't exist or failed to load — stay with resolved_impl
+
+            # Step 4: Terms acceptance check
             if user and onboarding.get("require_terms", False) and not user.get("accepted_terms"):
                 body_lower = body.strip().lower()
 
                 if body_lower in ("acepto", "accept", "si", "sí", "ok"):
-                    # Accept terms
                     from src.engine.supabase_client import _run, get_client
                     import datetime
                     await _run(lambda: get_client().table("users").update({
@@ -178,27 +269,25 @@ async def twilio_webhook(request: Request) -> Response:
                         "terms_accepted_message",
                         "Perfecto! Ya puedes empezar. Envía tus fotos y audios.",
                     )
-                    await send_message(from_phone, accepted_msg)
+                    await send_message(from_phone, accepted_msg, from_number=to_number)
                     logger.info("user_accepted_terms", phone=phone, impl=resolved_impl)
                     twiml = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
                     return Response(content=twiml, media_type="application/xml")
                 else:
-                    # Send welcome + T&C message
                     welcome = onboarding.get(
                         "welcome_message",
-                        "Bienvenido a Field Genius! Para continuar, responde *acepto*.",
+                        "Bienvenido a Radar Xponencial! Para continuar, responde *acepto*.",
                     )
-                    await send_message(from_phone, welcome)
+                    await send_message(from_phone, welcome, from_number=to_number)
                     logger.info("user_onboarding_sent", phone=phone, impl=resolved_impl)
                     twiml = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
                     return Response(content=twiml, media_type="application/xml")
 
-            # Step 3: First contact for open-mode users (no terms, just welcome)
+            # Step 5: First contact for open-mode users (no terms, just welcome)
             if not user and impl_config.access_mode == "open":
                 welcome = onboarding.get("welcome_message")
                 if welcome:
-                    # Will show welcome once — user gets created by get_or_create_session below
-                    await send_message(from_phone, welcome)
+                    await send_message(from_phone, welcome, from_number=to_number)
 
         except Exception as e:
             logger.error("access_check_failed", phone=phone, error=str(e))

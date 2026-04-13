@@ -236,6 +236,26 @@ async def get_session(session_id: str) -> dict[str, Any] | None:
     return await _run(_sync)
 
 
+async def update_session_implementation_today(phone: str, impl_id: str) -> None:
+    """Update today's session implementation for a phone (if a session exists).
+
+    Idempotent. Used when a user switches demos via keyword — any files already
+    received today get re-categorized under the new implementation.
+    """
+    def _sync():
+        client = get_client()
+        today = datetime.date.today().isoformat()
+        client.table("sessions").update({
+            "implementation": impl_id,
+            "updated_at": datetime.datetime.now(datetime.UTC).isoformat(),
+        }).eq("user_phone", phone).eq("date", today).execute()
+    try:
+        await _run(_sync)
+        logger.info("session_impl_updated_today", phone=phone, impl=impl_id)
+    except Exception as e:
+        logger.warning("session_impl_update_failed", phone=phone, error=str(e))
+
+
 async def get_implementation_by_whatsapp_number(whatsapp_number: str) -> str | None:
     """Resolve implementation ID from the Twilio WhatsApp number (To field).
 

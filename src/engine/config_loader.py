@@ -45,6 +45,10 @@ class ImplementationConfig:
     access_mode: str = "open"
     # Onboarding messages (configurable per implementation)
     onboarding_config: dict[str, Any] = field(default_factory=dict)
+    # Demo keywords — first token of a message matching any of these switches the user to this impl
+    demo_keywords: list[str] = field(default_factory=list)
+    # Fallback implementation when access_mode=whitelist rejects a user (useful for demo fallback)
+    fallback_implementation: str | None = None
 
     def get_country_context(self, country_code: str) -> dict[str, Any]:
         """Get country-specific config. Falls back to first available or empty."""
@@ -59,6 +63,13 @@ class ImplementationConfig:
 _cache: dict[str, ImplementationConfig] = {}
 _cache_ts: dict[str, float] = {}
 _CACHE_TTL = 300  # seconds
+
+# Keyword → impl_id index (built lazily, invalidated with _cache_ts)
+_keyword_index: dict[str, str] = {}
+_keyword_index_ts: float = 0.0
+
+# Reserved keywords that cannot be used as demo_keywords (they trigger the existing menu)
+RESERVED_KEYWORDS = {"menu", "menú", "proyectos", "proyecto", "cambiar"}
 
 
 async def get_implementation(impl_id: str) -> ImplementationConfig:
@@ -97,6 +108,72 @@ async def get_vision_strategy(impl_id: str) -> str:
     return config.vision_strategy
 
 
+async def _build_keyword_index() -> dict[str, str]:
+    """Scan all active implementations and build the keyword → impl_id lookup.
+
+    Colisiones: log WARNING y queda el primer impl_id en orden alfabético.
+    Reserved keywords se excluyen.
+    """
+    try:
+        from src.engine.supabase_client import get_client, _run
+
+        def _fetch():
+            client = get_client()
+            result = (
+                client.table("implementations")
+                .select("id, demo_keywords")
+                .eq("status", "active")
+                .order("id")
+                .execute()
+            )
+            return result.data or []
+
+        rows = await _run(_fetch)
+    except Exception as e:
+        logger.warning("keyword_index_build_failed", error=str(e))
+        return {}
+
+    index: dict[str, str] = {}
+    for row in rows:
+        impl_id = row["id"]
+        keywords = row.get("demo_keywords") or []
+        for kw in keywords:
+            if not kw:
+                continue
+            kw_norm = kw.strip().lower()
+            if not kw_norm:
+                continue
+            if kw_norm in RESERVED_KEYWORDS:
+                logger.warning("keyword_reserved_skipped", keyword=kw_norm, impl=impl_id)
+                continue
+            if kw_norm in index:
+                logger.warning(
+                    "keyword_collision",
+                    keyword=kw_norm,
+                    kept=index[kw_norm],
+                    skipped=impl_id,
+                )
+                continue
+            index[kw_norm] = impl_id
+
+    logger.info("keyword_index_built", entries=len(index))
+    return index
+
+
+async def get_impl_by_keyword(keyword: str) -> str | None:
+    """Return the impl_id that owns a given demo keyword, or None.
+
+    Rebuilds the index lazily if expired (aligned with _CACHE_TTL).
+    """
+    global _keyword_index, _keyword_index_ts
+    import time
+    now = time.time()
+    if not _keyword_index or (now - _keyword_index_ts) > _CACHE_TTL:
+        _keyword_index = await _build_keyword_index()
+        _keyword_index_ts = now
+    return _keyword_index.get((keyword or "").strip().lower())
+
+
 async def get_visit_types(impl_id: str) -> list[VisitTypeConfig]:
     """Get all active visit types for an implementation."""
     config = await get_implementation(impl_id)
@@ -132,12 +209,18 @@ async def get_visit_type_schema(impl_id: str, visit_type_slug: str) -> dict[str,
 
 async def reload(impl_id: str | None = None) -> None:
     """Clear cache, forcing next access to reload from DB/files."""
+    global _keyword_index, _keyword_index_ts
     if impl_id:
         _cache.pop(impl_id, None)
+        _cache_ts.pop(impl_id, None)
         logger.info("config_cache_cleared", implementation=impl_id)
     else:
         _cache.clear()
+        _cache_ts.clear()
         logger.info("config_cache_cleared_all")
+    # Always rebuild keyword index on reload
+    _keyword_index = {}
+    _keyword_index_ts = 0.0
 
 
 async def _load_from_db(impl_id: str) -> ImplementationConfig | None:
@@ -180,6 +263,8 @@ async def _load_from_db(impl_id: str) -> ImplementationConfig | None:
             whatsapp_number=row.get("whatsapp_number", ""),
             access_mode=row.get("access_mode", "open"),
             onboarding_config=row.get("onboarding_config") or {},
+            demo_keywords=row.get("demo_keywords") or [],
+            fallback_implementation=row.get("fallback_implementation"),
         )
 
         # Load visit types
