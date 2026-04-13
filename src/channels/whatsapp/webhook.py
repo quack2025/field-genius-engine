@@ -34,6 +34,12 @@ _DEDUP_TTL_SECONDS = 300  # 5 minutes
 # Keywords that trigger sending the configured sample report (no impl switch)
 EXAMPLE_KEYWORDS = {"ejemplo", "example", "sample", "muestra", "ver ejemplo"}
 
+# Keywords that accept T&C (text or button title)
+ACCEPT_KEYWORDS = {"acepto", "accept", "si", "sí", "ok", "acepta", "de acuerdo"}
+
+# Keywords that decline T&C (text or button title)
+DECLINE_KEYWORDS = {"no acepto", "no", "decline", "rechazo", "cancelar"}
+
 
 def _is_duplicate(message_sid: str) -> bool:
     """Check if MessageSid was already processed. Thread-safe for single process."""
@@ -290,11 +296,12 @@ async def _webhook_inner(request: Request) -> Response:
                 twiml = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
                 return Response(content=twiml, media_type="application/xml")
 
-            # Step 4: Terms acceptance check
+            # Step 4: Terms acceptance check (only if require_terms=true)
             if user and onboarding.get("require_terms", False) and not user.get("accepted_terms"):
-                body_lower = body.strip().lower()
+                body_lower = body.strip().lower() if body else ""
 
-                if body_lower in ("acepto", "accept", "si", "sí", "ok"):
+                # Accept path (text or button tap)
+                if body_lower in ACCEPT_KEYWORDS:
                     from src.engine.supabase_client import _run, get_client
                     import datetime
                     await _run(lambda: get_client().table("users").update({
@@ -309,11 +316,35 @@ async def _webhook_inner(request: Request) -> Response:
                     logger.info("user_accepted_terms", phone=phone, impl=resolved_impl)
                     twiml = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
                     return Response(content=twiml, media_type="application/xml")
-                else:
-                    await _send_welcome(onboarding, from_phone, to_number)
-                    logger.info("user_onboarding_sent", phone=phone, impl=resolved_impl)
+
+                # Decline path (text or button tap)
+                if body_lower in DECLINE_KEYWORDS:
+                    decline_msg = onboarding.get(
+                        "terms_declined_message",
+                        "Entendido. Si cambias de opinión, escríbenos de nuevo. ¡Gracias por tu tiempo!",
+                    )
+                    await send_message(from_phone, decline_msg, from_number=to_number)
+                    logger.info("user_declined_terms", phone=phone, impl=resolved_impl)
                     twiml = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
                     return Response(content=twiml, media_type="application/xml")
+
+                # Neither accept nor decline — show T&C prompt (card with buttons if configured)
+                terms_sid = onboarding.get("terms_content_sid")
+                if terms_sid:
+                    from src.channels.whatsapp.sender import send_content_template
+                    sid = await send_content_template(
+                        from_phone,
+                        terms_sid,
+                        from_number=to_number,
+                    )
+                    if not sid:
+                        # Fallback to text welcome if content template failed
+                        await _send_welcome(onboarding, from_phone, to_number)
+                else:
+                    await _send_welcome(onboarding, from_phone, to_number)
+                logger.info("user_onboarding_sent", phone=phone, impl=resolved_impl)
+                twiml = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
+                return Response(content=twiml, media_type="application/xml")
 
             # Step 5: First contact for open-mode users (no terms, just welcome)
             if not user and impl_config.access_mode == "open":

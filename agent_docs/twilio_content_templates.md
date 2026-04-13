@@ -67,6 +67,48 @@ if body and body.strip():
 - `laundry_care.demo_keywords = ['retail', 'cpg', 'shopper']` → button title "Retail" matches
 - `demo_telecom.demo_keywords = ['telecom', 'telco', 'demo']` → button title "Telecom" matches
 
+## T&C Accept/Decline template (for whitelist implementations)
+
+For implementations that require terms acceptance (`onboarding_config.require_terms = true`), you can show an interactive card with "Acepto" / "No acepto" buttons instead of asking users to type:
+
+### Step 1: Create template in Twilio Console
+
+1. Content Editor → Create → **Quick Reply**
+2. **Name:** `radar_terms_card`
+3. **Language:** `es_MX`
+4. **Body:**
+   ```
+   Bienvenido a *Radar Xponencial*.
+
+   ⚠️ Las fotos, audios y videos que envíes serán procesados por inteligencia artificial. No envíes contenido personal, confidencial o inapropiado.
+
+   Al continuar, confirmas que entiendes estas condiciones.
+   ```
+5. **Quick Reply buttons:**
+   - Button 1: title = `Acepto` (must be in ACCEPT_KEYWORDS in webhook.py)
+   - Button 2: title = `No acepto` (must be in DECLINE_KEYWORDS)
+6. Save. Copy the **Content SID** (`HX...`)
+
+### Step 2: Configure the implementation
+
+Backoffice → Proyectos → (e.g., telecable) → Config → Onboarding → set `terms_content_sid` to the HX SID.
+
+### How it works in the webhook
+
+When `require_terms=true` and the user hasn't accepted yet:
+- If `terms_content_sid` is set, send the content template (card with buttons)
+- If not set, fall back to sending the plain-text `welcome_message`
+
+When the user taps:
+- **"Acepto"** → Twilio sends `Body=Acepto` → matches `ACCEPT_KEYWORDS` → updates `user.accepted_terms=true`, sends `terms_accepted_message`
+- **"No acepto"** → Twilio sends `Body=No acepto` → matches `DECLINE_KEYWORDS` → sends `terms_declined_message`, no state change
+
+Keyword constants (in `src/channels/whatsapp/webhook.py`):
+```python
+ACCEPT_KEYWORDS = {"acepto", "accept", "si", "sí", "ok", "acepta", "de acuerdo"}
+DECLINE_KEYWORDS = {"no acepto", "no", "decline", "rechazo", "cancelar"}
+```
+
 ## Advanced: List Picker (more than 3 options)
 
 Quick Reply supports max 3 buttons. For more options, use **List Picker**:
