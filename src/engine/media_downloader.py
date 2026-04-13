@@ -66,6 +66,32 @@ def _validate_magic_bytes(file_bytes: bytes, claimed_type: str) -> bool:
     return False
 
 
+class UnsupportedMediaError(ValueError):
+    """Raised when user sends a content type we can't process (PDF, doc, sticker)."""
+    def __init__(self, content_type: str):
+        super().__init__(f"Unsupported media type: {content_type}")
+        self.content_type = content_type
+
+
+def is_supported_media(content_type: str) -> tuple[bool, str]:
+    """Return (supported, media_type) for a claimed MIME type.
+
+    Returns (True, 'image'|'audio'|'video') if we can process it,
+    (False, '') otherwise.
+    """
+    ct = (content_type or "").lower().split(";")[0].strip()
+    if ct in MIME_TO_EXT:
+        return True, MIME_TO_TYPE[ct]
+    # Infer from prefix for common variations
+    if ct.startswith("image/") and "sticker" not in ct and "webp.animated" not in ct:
+        return True, "image"
+    if ct.startswith("audio/"):
+        return True, "audio"
+    if ct.startswith("video/"):
+        return True, "video"
+    return False, ""
+
+
 async def download_and_store(
     media_url: str,
     content_type: str,
@@ -75,26 +101,39 @@ async def download_and_store(
     """Download media from Twilio URL and upload to Supabase Storage.
 
     Returns file metadata dict to store in session.raw_files.
+    Raises UnsupportedMediaError for PDFs, docs, stickers, contacts, etc.
     """
-    # Warn on unknown content types but continue — Twilio/WhatsApp sometimes
-    # sends unusual MIME types (heic, application/octet-stream, etc). We'd
-    # rather accept + log than reject the user's photo.
-    if content_type not in MIME_TO_EXT:
-        logger.warning("media_unknown_content_type", content_type=content_type)
-        # Fallback: try to infer from URL or default to image/jpeg
-        if "image" in content_type.lower() or content_type == "application/octet-stream":
-            content_type_effective = "image/jpeg"
-        elif "audio" in content_type.lower():
-            content_type_effective = "audio/ogg"
-        elif "video" in content_type.lower():
-            content_type_effective = "video/mp4"
-        else:
-            content_type_effective = "image/jpeg"
-        ext = MIME_TO_EXT[content_type_effective]
-        media_type = MIME_TO_TYPE[content_type_effective]
+    # Normalize content type
+    ct_norm = (content_type or "").lower().split(";")[0].strip()
+
+    # Hard reject known-unsupported types (friendly message sent by caller)
+    if ct_norm in MIME_TO_EXT:
+        ext = MIME_TO_EXT[ct_norm]
+        media_type = MIME_TO_TYPE[ct_norm]
     else:
-        ext = MIME_TO_EXT[content_type]
-        media_type = MIME_TO_TYPE[content_type]
+        # Try to infer from prefix
+        if ct_norm.startswith("image/") and "webp" not in ct_norm:
+            # Unusual image subtype (heic, heif, tiff, etc) — treat as JPEG
+            logger.warning("media_unusual_image_type", content_type=content_type)
+            ext = ".jpg"
+            media_type = "image"
+        elif ct_norm.startswith("audio/"):
+            logger.warning("media_unusual_audio_type", content_type=content_type)
+            ext = ".ogg"
+            media_type = "audio"
+        elif ct_norm.startswith("video/"):
+            logger.warning("media_unusual_video_type", content_type=content_type)
+            ext = ".mp4"
+            media_type = "video"
+        elif ct_norm == "application/octet-stream":
+            # Ambiguous binary — WhatsApp sometimes sends photos this way
+            logger.warning("media_octet_stream_treating_as_image", content_type=content_type)
+            ext = ".jpg"
+            media_type = "image"
+        else:
+            # PDFs, docs, vcards, stickers, contacts, etc — we can't process these
+            logger.info("media_unsupported_type_rejected", content_type=content_type)
+            raise UnsupportedMediaError(content_type)
     file_id = str(uuid.uuid4())[:8]
     filename = f"{file_id}{ext}"
     storage_path = f"{session_id}/{filename}"

@@ -371,7 +371,15 @@ async def _webhook_inner(request: Request) -> Response:
                 "timestamp": datetime.datetime.now(datetime.UTC).isoformat(),
             }
             await handle_media(phone, location_meta)
-            await send_message(from_phone, "Ubicacion recibida")
+            # Friendlier response for demo visitors — location alone doesn't generate a report
+            location_ack = (
+                "Ubicación recibida 📍\n\n"
+                "Para analizar lo que ves en este punto, envíame una *foto* de:\n"
+                "• Una góndola, anaquel o exhibición\n"
+                "• Publicidad o material POP\n"
+                "• El punto de venta completo"
+            )
+            await send_message(from_phone, location_ack, from_number=to_number)
             logger.info(
                 "location_received",
                 phone=phone,
@@ -394,16 +402,28 @@ async def _webhook_inner(request: Request) -> Response:
             # Get or create session first to get session_id
             import datetime
             from src.engine.supabase_client import get_or_create_session
+            from src.engine.media_downloader import UnsupportedMediaError
 
             session = await get_or_create_session(phone, datetime.date.today(), resolved_impl)
 
             # Download media and upload to Supabase Storage
-            file_meta = await download_and_store(
-                media_url=media_url,
-                content_type=content_type,
-                session_id=session["id"],
-                user_phone=phone,
-            )
+            try:
+                file_meta = await download_and_store(
+                    media_url=media_url,
+                    content_type=content_type,
+                    session_id=session["id"],
+                    user_phone=phone,
+                )
+            except UnsupportedMediaError as ume:
+                logger.info("media_rejected_unsupported", phone=phone, content_type=ume.content_type)
+                await send_message(
+                    from_phone,
+                    "Este demo solo procesa *fotos*, *audios* y *videos*. "
+                    "PDFs, documentos, stickers y contactos no se pueden analizar. "
+                    "Envía una foto para probar.",
+                    from_number=to_number,
+                )
+                continue
 
             # Add file to session
             await handle_media(phone, file_meta)
