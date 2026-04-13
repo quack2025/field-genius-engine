@@ -407,10 +407,52 @@ async def _webhook_inner(request: Request) -> Response:
         try:
             # Get or create session first to get session_id
             import datetime
-            from src.engine.supabase_client import get_or_create_session
-            from src.engine.media_downloader import UnsupportedMediaError
+            from src.engine.supabase_client import get_or_create_session, get_session_files
+            from src.engine.media_downloader import UnsupportedMediaError, is_supported_media
+            from src.engine.demo_analyzer import MAX_IMAGES_PER_BATCH, MAX_AUDIOS_PER_BATCH
 
             session = await get_or_create_session(phone, datetime.date.today(), resolved_impl)
+
+            demo_mode = bool(impl_config and impl_config.onboarding_config.get("demo_mode"))
+            batch_mode = (
+                impl_config.onboarding_config.get("demo_batch_mode", "explicit")
+                if impl_config else "explicit"
+            )
+
+            # Demo+explicit: enforce caps BEFORE download to save bandwidth/storage.
+            # Infer type from content_type (before the actual file_meta is built).
+            prior_n_images = 0
+            prior_n_audios = 0
+            if demo_mode and batch_mode == "explicit":
+                supported, inferred_type = is_supported_media(content_type)
+                if supported and inferred_type in ("image", "audio"):
+                    try:
+                        existing = await get_session_files(session["id"])
+                        prior_n_images = sum(1 for f in existing if f.get("type") == "image")
+                        prior_n_audios = sum(1 for f in existing if f.get("type") == "audio")
+                    except Exception:
+                        pass
+
+                    if inferred_type == "image" and prior_n_images >= MAX_IMAGES_PER_BATCH:
+                        await send_message(
+                            from_phone,
+                            f"Este demo ya recibió el máximo de *{MAX_IMAGES_PER_BATCH} fotos* por análisis 📸\n\n"
+                            f"Escribe *generar* para ver el reporte consolidado, o *otro* para empezar un demo nuevo.\n\n"
+                            f"_En la versión completa de Radar Xponencial no hay este límite — manejamos cientos de fotos por usuario al día._",
+                            from_number=to_number,
+                        )
+                        logger.info("demo_cap_rejected", phone=phone, type="image", current=prior_n_images)
+                        continue
+                    if inferred_type == "audio" and prior_n_audios >= MAX_AUDIOS_PER_BATCH:
+                        await send_message(
+                            from_phone,
+                            f"Este demo ya recibió el máximo de *{MAX_AUDIOS_PER_BATCH} audios* por análisis 🎤\n\n"
+                            f"Escribe *generar* para ver el reporte.\n\n"
+                            f"_En la versión completa no hay este límite._",
+                            from_number=to_number,
+                        )
+                        logger.info("demo_cap_rejected", phone=phone, type="audio", current=prior_n_audios)
+                        continue
 
             # Download media and upload to Supabase Storage
             try:
@@ -439,12 +481,6 @@ async def _webhook_inner(request: Request) -> Response:
             from src.engine.worker import enqueue_preprocess
             await enqueue_preprocess(session["id"], file_meta, implementation=impl_id)
 
-            # Demo mode routing (per-impl via onboarding_config.demo_batch_mode)
-            demo_mode = bool(impl_config and impl_config.onboarding_config.get("demo_mode"))
-            batch_mode = (
-                impl_config.onboarding_config.get("demo_batch_mode", "explicit")
-                if impl_config else "explicit"
-            )
             ftype = file_meta.get("type")
 
             if demo_mode and batch_mode == "instant" and ftype == "image":
@@ -472,16 +508,35 @@ async def _webhook_inner(request: Request) -> Response:
                     "video": "video 🎬",
                 }.get(ftype, "archivo")
                 # Count only demo-relevant files accumulated today
-                from src.engine.supabase_client import get_session_files
                 try:
                     all_files = await get_session_files(session["id"])
                     total = sum(1 for f in all_files if f.get("type") in ("image", "audio", "video"))
                 except Exception:
                     total = 1
-                ack = (
-                    f"Recibí tu {label} ({total} archivo{'s' if total != 1 else ''}).\n\n"
-                    f"Envía más si quieres o escribe *generar* cuando termines para ver el análisis."
-                )
+
+                # Detect if this file just brought us AT the cap (not over)
+                just_hit_image_cap = ftype == "image" and (prior_n_images + 1) == MAX_IMAGES_PER_BATCH
+                just_hit_audio_cap = ftype == "audio" and (prior_n_audios + 1) == MAX_AUDIOS_PER_BATCH
+
+                if just_hit_image_cap:
+                    ack = (
+                        f"Recibí tu {label} ({total} archivo{'s' if total != 1 else ''}).\n\n"
+                        f"⚠️ Este demo analiza hasta *{MAX_IMAGES_PER_BATCH} fotos* por reporte. "
+                        f"Escribe *generar* ahora para ver el análisis consolidado.\n\n"
+                        f"_En la versión completa de Radar Xponencial no hay este límite — manejamos cientos de fotos por usuario al día._"
+                    )
+                elif just_hit_audio_cap:
+                    ack = (
+                        f"Recibí tu {label} ({total} archivo{'s' if total != 1 else ''}).\n\n"
+                        f"⚠️ Llegaste al máximo de *{MAX_AUDIOS_PER_BATCH} audios* para este demo. "
+                        f"Escribe *generar* para ver el análisis.\n\n"
+                        f"_En la versión completa no hay este límite._"
+                    )
+                else:
+                    ack = (
+                        f"Recibí tu {label} ({total} archivo{'s' if total != 1 else ''}).\n\n"
+                        f"Envía más si quieres o escribe *generar* cuando termines para ver el análisis."
+                    )
                 await send_message(from_phone, ack, from_number=to_number)
             else:
                 # Field-agent flow: accumulate and wait for "reporte" trigger word
