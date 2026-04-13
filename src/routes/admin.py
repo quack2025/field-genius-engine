@@ -224,6 +224,26 @@ async def update_implementation(impl_id: str, body: ImplementationUpdate, user: 
                 detail=f"fallback_implementation '{updates['fallback_implementation']}' is not active",
             )
 
+    # Merge onboarding_config with existing (don't replace) so partial updates
+    # from the backoffice don't lose fields the frontend didn't send.
+    if "onboarding_config" in updates and isinstance(updates["onboarding_config"], dict):
+        try:
+            existing = (
+                client.table("implementations")
+                .select("onboarding_config")
+                .eq("id", impl_id)
+                .maybe_single()
+                .execute()
+            )
+            if existing and getattr(existing, "data", None):
+                existing_config = existing.data.get("onboarding_config") or {}
+                if isinstance(existing_config, dict):
+                    # New values take precedence; existing fields not in the payload are preserved
+                    merged = {**existing_config, **updates["onboarding_config"]}
+                    updates["onboarding_config"] = merged
+        except Exception as e:
+            logger.warning("onboarding_config_merge_failed", impl=impl_id, error=str(e))
+
     updates["updated_at"] = datetime.datetime.now(datetime.UTC).isoformat()
 
     try:
