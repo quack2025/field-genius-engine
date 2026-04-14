@@ -23,6 +23,10 @@ from anthropic import AsyncAnthropic
 from src.config.settings import settings
 from src.engine.ai_semaphore import get_ai_semaphore
 from src.engine.config_loader import ImplementationConfig
+from src.engine.content_gate import (
+    ContentGateResult,
+    classify_session_images,
+)
 from src.engine.vision import analyze_from_storage, analyze_image
 from src.engine.transcriber import transcribe, transcribe_bytes
 from src.engine.video import process_video
@@ -125,6 +129,24 @@ async def generate_demo_report(
 
     if not images and not videos:
         raise RuntimeError("no_visual_content")
+
+    # ── Content gate: filter out non-retail images before vision ──
+    # Reads preprocessor classification (content_category/blocked/flagged)
+    # from session_files, runs inline Haiku classification for any file
+    # missing a cached verdict. Videos bypass the gate (see content_gate.py).
+    gate_result: ContentGateResult = await classify_session_images(images)
+    if gate_result.decision == "refuse" and not videos:
+        # All images rejected and no videos to fall back on — raise a
+        # specific error so the caller can send the gate's refusal message.
+        logger.info("demo_content_gate_refused", impl=impl_config.id,
+                    excluded=len(gate_result.excluded_verdicts))
+        err = RuntimeError("content_gate_refused")
+        err.user_message = gate_result.refusal_message()  # attach for caller
+        raise err
+    # Replace the images list with the allowed subset. `gate_result` keeps
+    # track of the excluded files so we can mention them in the final report.
+    if gate_result.verdicts:
+        images = gate_result.allowed_files
 
     # Build vision context (common to all image analyses)
     context_parts: list[str] = []
@@ -243,6 +265,9 @@ async def generate_demo_report(
         user_msg_parts.append("\n\nAudios del usuario:\n" + "\n".join(transcripts))
     if text_context:
         user_msg_parts.append(f"\n\nTexto adicional del usuario: \"{text_context}\"")
+    exclusion_note = gate_result.exclusion_note_for_prompt()
+    if exclusion_note:
+        user_msg_parts.append(f"\n\n{exclusion_note}")
     user_msg_parts.append(
         "\n\nGenera el mini-reporte WhatsApp siguiendo EXACTAMENTE el formato del system prompt. "
         "Integra los hallazgos de TODAS las fotos en un solo análisis consolidado."

@@ -481,6 +481,95 @@ async def _webhook_inner(request: Request) -> Response:
         except Exception as e:
             logger.error("location_processing_failed", phone=phone, error=str(e))
 
+    # Caption capture: if the user sent media with a text caption AND we're
+    # in a demo impl, save the caption as a text row in session_files so the
+    # analyzer can include it as context. Done once per request, before the
+    # media loop, so even if POC gating blocks the media we still keep the
+    # text (user's caption often contains the location / intent we need).
+    if (
+        body
+        and num_media > 0
+        and impl_config
+        and impl_config.onboarding_config.get("demo_mode")
+        and resolved_impl
+    ):
+        try:
+            import datetime as _dt_capt
+            from src.engine.supabase_client import (
+                get_or_create_session as _gcs_capt,
+                add_caption_to_session,
+            )
+            _sess_capt = await _gcs_capt(phone, _dt_capt.date.today(), resolved_impl)
+            await add_caption_to_session(_sess_capt["id"], body)
+            logger.info("caption_captured", phone=phone, chars=len(body), session_id=_sess_capt["id"][:8])
+        except Exception as e:
+            logger.warning("caption_capture_failed", phone=phone, error=str(e)[:120])
+
+    # Questionnaire via audio: if the user received the pre-analysis prompt
+    # and responds with a voice note instead of text, transcribe the audio
+    # inline (Whisper) and complete the questionnaire with the transcript.
+    # This keeps the experience natural for users who prefer voice.
+    if (
+        num_media > 0
+        and pending_location_active
+        and impl_config
+        and impl_config.onboarding_config.get("demo_mode")
+    ):
+        # Inspect the first media — if it's audio, route to the questionnaire
+        # helper. Subsequent media in the same request are processed as usual.
+        first_ct = params.get("MediaContentType0", "application/octet-stream")
+        from src.engine.media_downloader import is_supported_media as _is_supported_q
+        _supp_q, _type_q = _is_supported_q(first_ct)
+        if _supp_q and _type_q == "audio":
+            first_url = params.get("MediaUrl0", "")
+            try:
+                import datetime as _dt_aq
+                from src.engine.supabase_client import get_or_create_session as _gcs_aq
+                from src.engine.media_downloader import download_and_store as _dl_aq
+                from src.engine.transcriber import transcribe as _tr_aq
+                _sess_aq = await _gcs_aq(phone, _dt_aq.date.today(), resolved_impl)
+                _meta_aq = await _dl_aq(
+                    media_url=first_url,
+                    content_type=first_ct,
+                    session_id=_sess_aq["id"],
+                    user_phone=phone,
+                )
+                _storage_path = _meta_aq.get("storage_path")
+                transcript = ""
+                if _storage_path:
+                    transcript = await _tr_aq(_storage_path)
+                if transcript and transcript.strip():
+                    pending_location_active = False
+                    await _complete_questionnaire_and_analyze(
+                        phone=phone,
+                        from_phone=from_phone,
+                        to_number=to_number,
+                        impl_config=impl_config,
+                        resolved_impl=resolved_impl,
+                        answer_text=transcript.strip(),
+                    )
+                    logger.info(
+                        "demo_questionnaire_audio_answered",
+                        phone=phone,
+                        chars=len(transcript),
+                    )
+                    twiml = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
+                    return Response(content=twiml, media_type="application/xml")
+                else:
+                    # Transcription returned empty — fall back to the text prompt
+                    await send_message(
+                        from_phone,
+                        "No pude entender tu audio 🎤😅\n\n"
+                        "Por favor respondé con otro audio o por texto — basta con que me cuentes "
+                        "dónde estás, tu rol, y qué querés que enfoque el análisis.",
+                        from_number=to_number,
+                    )
+                    twiml = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
+                    return Response(content=twiml, media_type="application/xml")
+            except Exception as e:
+                logger.error("demo_audio_questionnaire_failed", phone=phone, error=str(e)[:200])
+                # Fall through to normal media processing on unexpected failure
+
     # Process media attachments
     # POC gating: if the user tapped "POC" and is pending a company selection,
     # block ALL media until they answer with argos/telecable. Send the prompt
@@ -835,32 +924,16 @@ async def _webhook_inner(request: Request) -> Response:
                 await _clear_loc(phone)
                 pending_location_active = False
             else:
-                # Treat as the full questionnaire answer (location + role + focus
-                # as free text). Save it as both the location row and pass it as
-                # text_context to the batch runner so the synthesis prompt gets
-                # everything.
-                import datetime as _dt
-                sess = await _get_session(phone, _dt.date.today(), resolved_impl)
-                await add_text_location_to_session(sess["id"], body)
-                await _clear_loc(phone)
+                # Free-text questionnaire answer → delegate to the shared helper
                 pending_location_active = False
-                await send_message(
-                    from_phone,
-                    "¡Gracias! 🙌 Generando análisis con ese contexto…\n\n"
-                    "Te envío el reporte en unos segundos.",
-                    from_number=to_number,
+                await _complete_questionnaire_and_analyze(
+                    phone=phone,
+                    from_phone=from_phone,
+                    to_number=to_number,
+                    impl_config=impl_config,
+                    resolved_impl=resolved_impl,
+                    answer_text=body,
                 )
-                asyncio.create_task(
-                    _run_demo_batch_safe(
-                        session_id=sess["id"],
-                        impl_config=impl_config,
-                        phone=phone,
-                        from_phone=from_phone,
-                        to_number=to_number,
-                        text_context=body,
-                    )
-                )
-                logger.info("demo_questionnaire_answered", phone=phone, chars=len(body), session_id=sess["id"][:8])
                 twiml = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
                 return Response(content=twiml, media_type="application/xml")
 
@@ -1047,6 +1120,27 @@ async def _webhook_inner(request: Request) -> Response:
             twiml = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
             return Response(content=twiml, media_type="application/xml")
 
+        # ── Demo-mode fallback for unknown text ────────────────────
+        # If we got here, nothing explicit matched the user's text AND the
+        # impl is a demo. The field-agent handle_text flow would silently
+        # absorb it (adds to session as text_added with no response). In
+        # a demo that's a dead end. Send a short help message so users
+        # always get a reply.
+        if is_demo_impl and body.strip():
+            await send_message(
+                from_phone,
+                "No entendí ese mensaje 🤔\n\n"
+                "Puedes:\n"
+                "📸 Enviarme *fotos, videos o audios* del lugar que quieres analizar\n"
+                "✍️ Escribir *generar* cuando estés listo para el análisis\n"
+                "🔄 Escribir *otro* para probar el otro demo\n"
+                "💬 Escribir *contacto* si quieres hablar con nuestro equipo",
+                from_number=to_number,
+            )
+            logger.info("demo_unknown_text_fallback", phone=phone, body=body[:50])
+            twiml = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
+            return Response(content=twiml, media_type="application/xml")
+
         result = await handle_text(phone, body)
 
         if result["action"] == "trigger":
@@ -1186,6 +1280,54 @@ async def _run_demo_analysis_safe(
             pass
 
 
+async def _complete_questionnaire_and_analyze(
+    phone: str,
+    from_phone: str,
+    to_number: str,
+    impl_config,
+    resolved_impl: str,
+    answer_text: str,
+) -> None:
+    """Finalize the pre-analysis questionnaire with a free-form answer.
+
+    Single entry point used by BOTH the text handler (user typed a response)
+    and the media loop (user sent an audio note, which got transcribed).
+    Saves the answer as a text_location row, clears the pending flag, acks
+    the user, and spawns the batch analysis with the answer as text_context.
+    """
+    import datetime as _dt_q
+    from src.engine.supabase_client import (
+        add_text_location_to_session,
+        clear_pending_location_request,
+        get_or_create_session,
+    )
+    sess = await get_or_create_session(phone, _dt_q.date.today(), resolved_impl)
+    await add_text_location_to_session(sess["id"], answer_text)
+    await clear_pending_location_request(phone)
+    await send_message(
+        from_phone,
+        "¡Gracias! 🙌 Generando análisis con ese contexto…\n\n"
+        "Te envío el reporte en unos segundos.",
+        from_number=to_number,
+    )
+    asyncio.create_task(
+        _run_demo_batch_safe(
+            session_id=sess["id"],
+            impl_config=impl_config,
+            phone=phone,
+            from_phone=from_phone,
+            to_number=to_number,
+            text_context=answer_text,
+        )
+    )
+    logger.info(
+        "demo_questionnaire_answered",
+        phone=phone,
+        chars=len(answer_text),
+        session_id=sess["id"][:8],
+    )
+
+
 async def _run_demo_batch_safe(
     session_id: str,
     impl_config,
@@ -1210,6 +1352,7 @@ async def _run_demo_batch_safe(
         videos = [f for f in files if f.get("type") == "video" and f.get("storage_path")]
         audios = [f for f in files if f.get("type") == "audio" and f.get("storage_path")]
         locations = [f for f in files if f.get("type") == "location"]
+        captions = [f for f in files if f.get("type") == "text"]
 
         if not images and not videos:
             if audios:
@@ -1260,12 +1403,27 @@ async def _run_demo_batch_safe(
             country_name = country_tuple[1] if country_tuple else None
         # country_mode == "none" → country_name stays None
 
+        # Merge any stored captions with the explicit text_context arg so the
+        # analyzer sees everything the user wrote (photo captions + standalone
+        # questionnaire answer + anything else).
+        caption_texts: list[str] = []
+        for c in captions:
+            addr = (c.get("address") or "").strip()
+            if addr:
+                caption_texts.append(addr)
+        merged_parts: list[str] = []
+        if caption_texts:
+            merged_parts.append(" | ".join(caption_texts))
+        if text_context:
+            merged_parts.append(text_context)
+        merged_text_context = " | ".join(merged_parts) if merged_parts else None
+
         report = await generate_demo_report(
             files=files,
             impl_config=impl_config,
             country_name=country_name,
             location_hint=location_hint,
-            text_context=text_context,
+            text_context=merged_text_context,
         )
 
         await send_message(from_phone, report, from_number=to_number)
@@ -1292,6 +1450,22 @@ async def _run_demo_batch_safe(
             except Exception as e:
                 logger.warning("cta_footer_send_failed", phone=phone, error=str(e))
     except Exception as e:
+        # Content gate refusal: the analyzer attaches a user_message attribute
+        # explaining which kind of content the demo expects. Surface it verbatim.
+        user_message = getattr(e, "user_message", None)
+        if user_message:
+            logger.info(
+                "demo_content_gate_refused_user_notified",
+                phone=phone,
+                impl=getattr(impl_config, "id", "?"),
+                session_id=session_id[:8],
+            )
+            try:
+                await send_message(from_phone, user_message, from_number=to_number)
+            except Exception:
+                pass
+            return
+
         logger.error(
             "demo_batch_failed",
             phone=phone,

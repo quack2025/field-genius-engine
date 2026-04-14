@@ -567,6 +567,37 @@ async def clear_pending_location_request(phone: str) -> None:
         logger.warning("clear_pending_location_failed", phone=phone, error=str(e))
 
 
+async def add_caption_to_session(session_id: str, caption_text: str) -> None:
+    """Insert a text row into session_files representing a user-written caption
+    or free-form context. Demo analyzer reads these as additional text context
+    for the synthesis prompt.
+    """
+    clean = (caption_text or "").strip()
+    if not clean:
+        return
+    def _sync():
+        client = get_client()
+        row = {
+            "session_id": session_id,
+            "filename": None,
+            "storage_path": None,
+            "type": "text",
+            "content_type": "text/plain",
+            "size_bytes": len(clean.encode("utf-8")),
+            "public_url": None,
+            "latitude": None,
+            "longitude": None,
+            "address": clean[:1500],
+            "label": None,
+        }
+        try:
+            client.table("session_files").insert(row).execute()
+        except Exception as e:
+            logger.warning("caption_insert_failed", error=str(e))
+    await _run(_sync)
+    logger.info("caption_added", session_id=session_id, chars=len(clean))
+
+
 async def add_text_location_to_session(session_id: str, address_text: str) -> None:
     """Insert a textual location row into session_files (type=location, no lat/lng).
 
