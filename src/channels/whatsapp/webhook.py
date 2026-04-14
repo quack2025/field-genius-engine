@@ -58,6 +58,14 @@ POC_KEYWORDS = {"poc", "p.o.c.", "p.o.c"}
 POC_COMPANY_KEYWORDS = {"argos", "telecable"}
 PENDING_POC_TTL_MIN = 10
 
+# Self-service reset keywords — only honored on demo_mode impls. Wipes the
+# user's session + pending state so the next message starts the welcome flow.
+RESET_KEYWORDS = {
+    "reset", "reiniciar", "reiniciar demo", "borrar todo", "borrar",
+    "nueva conversacion", "nueva conversación", "nueva", "empezar de cero",
+    "start over",
+}
+
 # Location prompt — asked on first media in demo mode
 LOCATION_PROMPT_TTL_MIN = 10
 
@@ -696,10 +704,34 @@ async def _webhook_inner(request: Request) -> Response:
             twiml = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
             return Response(content=twiml, media_type="application/xml")
 
+        is_demo_impl = bool(impl_config and impl_config.onboarding_config.get("demo_mode"))
+
+        # ── Reset keyword (only on demo_mode impls) ────────────────
+        # Self-service reset for repeat testers — wipes today's session,
+        # clears pending state, unsets user.implementation/accepted_terms,
+        # and immediately re-sends the welcome card so the user can start
+        # a brand new flow without touching Supabase.
+        if is_demo_impl and body_lower in RESET_KEYWORDS:
+            from src.engine.supabase_client import reset_demo_session
+            await reset_demo_session(phone)
+            await send_message(
+                from_phone,
+                "✅ Listo, empezamos de cero. Tu sesión de demo fue reiniciada.",
+                from_number=to_number,
+            )
+            # Re-send the welcome immediately so the user sees the card
+            try:
+                if onboarding.get("welcome_message") or onboarding.get("welcome_content_sid"):
+                    await _send_welcome(onboarding, from_phone, to_number)
+            except Exception as e:
+                logger.warning("reset_welcome_resend_failed", phone=phone, error=str(e))
+            logger.info("demo_reset_triggered", phone=phone, impl=resolved_impl)
+            twiml = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
+            return Response(content=twiml, media_type="application/xml")
+
         # ── POC gating flow ────────────────────────────────────────
         # "POC" intent: user explicitly asked for a personalized POC. Set the
         # pending flag and prompt for the client company name.
-        is_demo_impl = bool(impl_config and impl_config.onboarding_config.get("demo_mode"))
         if is_demo_impl and body_lower in POC_KEYWORDS:
             from src.engine.supabase_client import set_pending_poc_selection, upsert_user
             if not user:

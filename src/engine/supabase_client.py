@@ -417,6 +417,61 @@ async def list_active_implementations() -> list[dict[str, Any]]:
     return await _run(_sync)
 
 
+async def reset_demo_session(phone: str) -> None:
+    """Reset a demo user back to "fresh visitor" state without deleting their row.
+
+    Wipes today's session + files, clears all pending state machines, and unsets
+    the user's implementation/accepted_terms so the next message triggers the
+    first-contact welcome flow again.
+
+    Used by the WhatsApp `reset` keyword for self-service test loops, and
+    callable from the admin endpoint for support scenarios.
+    """
+    def _sync():
+        client = get_client()
+        today = datetime.date.today().isoformat()
+        # Find today's session
+        try:
+            sess = (
+                client.table("sessions")
+                .select("id")
+                .eq("user_phone", phone)
+                .eq("date", today)
+                .maybe_single()
+                .execute()
+            )
+        except Exception:
+            sess = None
+        if sess and getattr(sess, "data", None):
+            sid = sess.data["id"]
+            try:
+                client.table("session_files").delete().eq("session_id", sid).execute()
+            except Exception as e:
+                logger.warning("reset_session_files_failed", phone=phone, error=str(e))
+            try:
+                client.table("sessions").delete().eq("id", sid).execute()
+            except Exception as e:
+                logger.warning("reset_session_row_failed", phone=phone, error=str(e))
+
+        # Reset user fields back to fresh-visitor state. Keep the row itself
+        # to preserve any FK relationships (user_groups, demo_leads, etc).
+        try:
+            client.table("users").update({
+                "implementation": None,
+                "implementation_id": None,
+                "accepted_terms": False,
+                "onboarded_at": None,
+                "pending_poc_selection_at": None,
+                "pending_location_request_at": None,
+                "pending_contact_request_at": None,
+            }).eq("phone", phone).execute()
+        except Exception as e:
+            logger.warning("reset_user_fields_failed", phone=phone, error=str(e))
+
+    await _run(_sync)
+    logger.info("demo_user_reset", phone=phone)
+
+
 async def set_pending_poc_selection(phone: str) -> None:
     """Mark a user as waiting to provide a POC company name (for demo POC gating)."""
     def _sync():

@@ -194,7 +194,31 @@ Abre un chat de WhatsApp con el número **+1 (779) 228-4312** desde tu celular. 
 
 ## Reset de usuario para testing
 
-Para repetir cualquier flujo desde cero, hay que borrar tu user + session del día. En Supabase SQL Editor:
+Hay dos opciones, de fácil a más invasivo:
+
+### Opción A — Comando WhatsApp `reset` (recomendado)
+
+Desde tu chat de WhatsApp con el +17792284312, simplemente escribe:
+
+```
+reset
+```
+
+(También funcionan: `reiniciar`, `borrar todo`, `nueva conversación`, `empezar de cero`, `start over`.)
+
+El bot:
+1. Borra tu sesión del día y todos los archivos acumulados
+2. Resetea tu user (implementation, accepted_terms, todos los pending_*)
+3. Confirma "✅ Listo, empezamos de cero"
+4. Re-envía el card de bienvenida inmediatamente
+
+Después puedes empezar el flujo que quieras (Retail, POC, etc) sin tocar Supabase.
+
+**Solo funciona en proyectos con `demo_mode=true`**. En un proyecto real (cuando algún día existan field-agents whitelisted), `reset` no hace nada para evitar que un usuario se borre su día por accidente.
+
+### Opción B — SQL en Supabase (para casos extremos)
+
+Si el comando WhatsApp falla por alguna razón o necesitas borrar el user row entero (no solo resetearlo), usa este SQL en el editor de Supabase:
 
 ```sql
 -- Reemplazar el teléfono con el tuyo (formato +CCXXXXXXXXX)
@@ -211,6 +235,8 @@ BEGIN
   DELETE FROM users WHERE phone = target_phone;
 END $$;
 ```
+
+La diferencia con la Opción A: este SQL **borra completamente** el row del user, lo cual reescribe historial. La Opción A solo deja al user en estado "fresh visitor" sin perder el row.
 
 ---
 
