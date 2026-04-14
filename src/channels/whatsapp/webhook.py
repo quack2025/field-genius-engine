@@ -760,9 +760,46 @@ async def _webhook_inner(request: Request) -> Response:
                 clear_pending_poc_selection as _clear_poc,
             )
             if body_lower in POC_COMPANY_KEYWORDS:
-                # Defensive — Step 1 would normally handle this. Clear and fall through.
-                await _clear_poc(phone)
-                pending_poc_active = False
+                # User gave the right company name. Step 1 above ALREADY handles
+                # this when matched_impl != resolved_impl, but if the target is
+                # the same impl that was resolved by the WhatsApp number (e.g.
+                # typing "telecable" while the number is already telecable),
+                # Step 1 is a no-op and we have to perform the switch here.
+                try:
+                    from src.engine.config_loader import get_implementation
+                    from src.engine.supabase_client import (
+                        upsert_user as _upsert,
+                        update_session_implementation_today as _update_sess,
+                        clear_session_files_today as _clear_files,
+                    )
+                    target_impl_id = body_lower
+                    target_config = await get_implementation(target_impl_id)
+                    await _upsert(phone, target_impl_id)
+                    await _update_sess(phone, target_impl_id)
+                    await _clear_files(phone)
+                    await _clear_poc(phone)
+                    pending_poc_active = False
+                    post_switch = (target_config.onboarding_config or {}).get(
+                        "post_switch_message",
+                        f"Cambiado a *{target_config.name}*. Envíame fotos y escribe *generar* cuando termines.",
+                    )
+                    await send_message(from_phone, post_switch, from_number=to_number)
+                    logger.info(
+                        "poc_company_activated",
+                        phone=phone,
+                        impl=target_impl_id,
+                        via="pending_fallback",
+                    )
+                except Exception as e:
+                    logger.error("poc_company_activation_failed", phone=phone, error=str(e))
+                    await _clear_poc(phone)
+                    await send_message(
+                        from_phone,
+                        "No pude activar ese POC en este momento. Intenta de nuevo en un minuto o escribe *retail* para el demo general.",
+                        from_number=to_number,
+                    )
+                twiml = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
+                return Response(content=twiml, media_type="application/xml")
             elif body_lower in DEMO_ESCAPE_KEYWORDS:
                 # User escaped with a known command; let the downstream handlers run.
                 await _clear_poc(phone)
