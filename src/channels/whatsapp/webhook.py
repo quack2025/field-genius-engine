@@ -982,25 +982,49 @@ async def _webhook_inner(request: Request) -> Response:
 
             # If no location context AND we haven't already asked, send the
             # pre-analysis questionnaire (location + role + focus in one message)
-            # and wait for the user's reply.
+            # and wait for the user's reply. Uses a Twilio Content Template
+            # (Quick Reply with a "Saltar y generar" button) if configured,
+            # otherwise falls back to plain text.
             elif not has_location:
                 await set_pending_location_request(phone)
                 pending_location_active = True
-                await send_message(
-                    from_phone,
-                    "Antes de generar tu análisis, contáme en un solo mensaje:\n\n"
-                    "📍 *¿Dónde tomaste esto?*\n"
-                    "    _ej: \"Mercadona Madrid centro\", \"norte de Bogotá\"_\n\n"
-                    "👤 *¿Cuál es tu rol?*\n"
-                    "    _ej: trade marketing, mercaderista, investigación_\n\n"
-                    "🎯 *¿Qué quieres que enfoque el análisis?*\n"
-                    "    _ej: precios, agotados, layout, competencia_\n\n"
-                    "Respondé como te salga natural — yo extraigo lo importante.\n\n"
-                    "_En la versión completa, Radar Xponencial adapta estas preguntas al flujo de tu equipo: las podés quitar, cambiar o agregar más según tu operación._\n\n"
-                    "_Si prefieres saltar, escribí *generar* de nuevo._",
-                    from_number=to_number,
+
+                questionnaire_sid = (impl_config.onboarding_config or {}).get("questionnaire_content_sid")
+                sent_via_template = False
+                if questionnaire_sid:
+                    try:
+                        from src.channels.whatsapp.sender import send_content_template
+                        tpl_sid = await send_content_template(
+                            from_phone,
+                            questionnaire_sid,
+                            content_variables=None,
+                            from_number=to_number,
+                        )
+                        sent_via_template = bool(tpl_sid)
+                    except Exception as e:
+                        logger.warning("questionnaire_template_failed", phone=phone, error=str(e))
+
+                if not sent_via_template:
+                    await send_message(
+                        from_phone,
+                        "Antes de generar tu análisis, contáme en un solo mensaje:\n\n"
+                        "📍 *¿Dónde tomaste esto?*\n"
+                        "    _ej: \"Mercadona Madrid centro\", \"norte de Bogotá\"_\n\n"
+                        "👤 *¿Cuál es tu rol?*\n"
+                        "    _ej: trade marketing, mercaderista, investigación_\n\n"
+                        "🎯 *¿Qué quieres que enfoque el análisis?*\n"
+                        "    _ej: precios, agotados, layout, competencia_\n\n"
+                        "Respondé como te salga natural — yo extraigo lo importante.\n\n"
+                        "_En la versión completa, Radar Xponencial adapta estas preguntas al flujo de tu equipo: las podés quitar, cambiar o agregar más según tu operación._\n\n"
+                        "_Si prefieres saltar, escribí *generar* de nuevo._",
+                        from_number=to_number,
+                    )
+                logger.info(
+                    "demo_questionnaire_sent",
+                    phone=phone,
+                    session_id=session["id"][:8],
+                    via_template=sent_via_template,
                 )
-                logger.info("demo_questionnaire_sent", phone=phone, session_id=session["id"][:8])
                 twiml = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
                 return Response(content=twiml, media_type="application/xml")
 

@@ -128,6 +128,59 @@ Esa empresa no está disponible en nuestros POC actuales 🤔
 
 ---
 
+## Paso 1.C — Crear tercer Content Template "Pre-analysis questionnaire"
+
+Este card se envía cuando el usuario escribe `generar` sin haber dado contexto todavía. Tiene 3 preguntas (location + rol + enfoque) y un botón "Saltar y generar" para el escape hatch. Sin él, el backend usa un mensaje de texto equivalente.
+
+### 1.C.1 Crear el template
+
+- Twilio Console → **Messaging** → **Content Editor** → **Create new** → **Quick Reply**
+
+| Campo | Valor |
+|-------|-------|
+| **Friendly name** | `radar_questionnaire_v1` |
+| **Language** | `Spanish` |
+| **Content type** | `Quick Reply` |
+| **Body** | Ver bloque abajo |
+
+**Body del mensaje** (copiar/pegar tal cual, incluyendo los emojis y saltos de línea):
+
+```
+Antes de generar tu análisis, contáme en un solo mensaje:
+
+📍 *¿Dónde tomaste esto?*
+    ej: "Mercadona Madrid centro", "norte de Bogotá"
+
+👤 *¿Cuál es tu rol?*
+    ej: trade marketing, mercaderista, investigación
+
+🎯 *¿Qué quieres que enfoque el análisis?*
+    ej: precios, agotados, layout, competencia
+
+Respondé como te salga natural — yo extraigo lo importante.
+
+_En la versión completa, Radar Xponencial adapta estas preguntas al flujo de tu equipo._
+```
+
+### 1.C.2 Botón (uno solo)
+
+| Posición | Title | Reply text | Id |
+|----------|-------|------------|-----|
+| Button 1 | `Saltar y generar` | `generar` | `btn_skip_questionnaire` |
+
+**Importante:**
+- El campo **Reply** del botón debe ser `generar` (en minúsculas). Cuando el usuario tapea "Saltar y generar", Twilio emite el texto literal `generar` al backend, que lo trata como el keyword de disparo del batch (con pending_location_active todavía True → cae en el escape hatch → limpia el pending y corre el batch sin el contexto extra).
+- Si Twilio Console NO permite separar Title y Reply (en algunas versiones los botones usan el Title como Reply), usa `generar` directamente como el Title del botón. El botón se verá como "generar" pero funcionará bien.
+- **NO añadas un segundo botón**. El usuario que quiera responder escribe libremente; el que quiera saltar tapea el botón.
+
+### 1.C.3 Guardar y aprobar
+
+- Click **Save** → **Submit for WhatsApp approval**
+- Esperar aprobación (5-15 min)
+- Copiar el **Content SID** (`HXxxxxxxxx...`)
+
+---
+
 ## Paso 2 — Configurar el nuevo SID en el backoffice
 
 ### 2.1 Abrir la configuración de Telecable
@@ -155,6 +208,17 @@ Si creaste el template del Paso 1.B:
 - (Defensivo) Repetir en Laundry Care y Argos con el mismo SID
 
 Si NO creaste el template todavía, déjalo vacío. El backend usa un mensaje de texto plano con las mismas dos opciones (`poc` / `retail`) como fallback.
+
+### 2.2.C Configurar el SID del "Questionnaire"
+
+Si creaste el template del Paso 1.C:
+- En el mismo tab **Configuración** → sección **Mensajes de Onboarding (WhatsApp)**
+- Buscar el campo **Questionnaire Content SID (opcional)**
+- Pegar el SID del template `radar_questionnaire_v1`
+- Click **Guardar**
+- (Defensivo) Repetir en **todos los proyectos en modo demo** (Laundry Care, Argos, Telecable) con el mismo SID para que la experiencia sea consistente
+
+Si NO creaste el template todavía, déjalo vacío. El backend usa un mensaje de texto plano con las 3 preguntas + hint de "escribí *generar* de nuevo para saltar" como fallback.
 
 ### 2.3 (Opcional pero recomendado) Repetir en Laundry Care y Argos
 
