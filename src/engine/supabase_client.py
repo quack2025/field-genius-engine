@@ -40,12 +40,29 @@ def get_client() -> Client:
 
 
 async def get_user_by_phone(phone: str) -> dict[str, Any] | None:
-    """Look up a user by WhatsApp phone number."""
+    """Look up a user by WhatsApp phone number.
+
+    Uses .limit(1) instead of .maybe_single() to avoid a known postgrest-py v2
+    bug where .maybe_single() throws "Missing response code 204" on zero-row
+    results instead of returning None gracefully.
+    """
     logger.info("get_user_by_phone", phone=phone)
     def _sync():
         client = get_client()
-        result = client.table("users").select("*").eq("phone", phone).maybe_single().execute()
-        return result.data if result else None
+        try:
+            result = (
+                client.table("users")
+                .select("*")
+                .eq("phone", phone)
+                .limit(1)
+                .execute()
+            )
+        except Exception as e:
+            logger.warning("get_user_by_phone_failed", phone=phone, error=str(e)[:120])
+            return None
+        if result and result.data:
+            return result.data[0]
+        return None
     return await _run(_sync)
 
 
@@ -62,15 +79,29 @@ async def get_or_create_session(
 
     def _find():
         client = get_client()
-        result = (
-            client.table("sessions")
-            .select("*")
-            .eq("user_phone", phone)
-            .eq("date", str(date))
-            .maybe_single()
-            .execute()
-        )
-        return result.data if result else None
+        # Use .limit(1).order() instead of .maybe_single() — the latter throws
+        # "Missing response code 204" in postgrest-py v2 on zero rows AND on
+        # concurrent scenarios where the response is ambiguous. Ordering by
+        # created_at ascending makes this deterministic when there are
+        # duplicate sessions for the same (phone, date) pair (can happen under
+        # burst media loads without a DB unique constraint) — all requests
+        # converge on the oldest row, preventing orphaned files.
+        try:
+            result = (
+                client.table("sessions")
+                .select("*")
+                .eq("user_phone", phone)
+                .eq("date", str(date))
+                .order("created_at", desc=False)
+                .limit(1)
+                .execute()
+            )
+        except Exception as e:
+            logger.warning("session_find_failed", phone=phone, error=str(e)[:120])
+            return None
+        if result and result.data:
+            return result.data[0]
+        return None
 
     existing = await _run(_find)
     if existing:
@@ -103,9 +134,21 @@ async def get_or_create_session(
         result = client.table("sessions").insert(new_session).execute()
         return result.data[0]
 
-    session = await _run(_insert)
-    logger.info("session_created", session_id=session["id"])
-    return session
+    try:
+        session = await _run(_insert)
+        logger.info("session_created", session_id=session["id"])
+        return session
+    except Exception as e:
+        # Unique constraint violation (sql/033 added UNIQUE on user_phone, date)
+        # means another concurrent webhook request already inserted a session
+        # for this (phone, date). Re-query and return the winner.
+        err_str = str(e)
+        if "23505" in err_str or "duplicate key" in err_str.lower() or "sessions_user_phone_date_uniq" in err_str:
+            logger.info("session_insert_lost_race", phone=phone, error=err_str[:120])
+            existing_retry = await _run(_find)
+            if existing_retry:
+                return existing_retry
+        raise
 
 
 async def add_file_to_session(session_id: str, file_metadata: dict[str, Any]) -> None:
