@@ -83,6 +83,51 @@ Este demo convierte fotos, videos y audios en análisis de campo con IA.
 
 ---
 
+## Paso 1.B — Crear segundo Content Template "POC not found" (opcional pero recomendado)
+
+Este template se muestra cuando un visitante en el flujo POC escribe un nombre de empresa que no está en nuestro POC pipeline (por typo o porque no tiene acceso). Sin él, el backend usa un mensaje de texto plano equivalente — funciona pero es menos vistoso.
+
+### 1.B.1 Crear el template
+
+- Twilio Console → **Messaging** → **Content Editor** → **Create new** → **Quick Reply**
+
+| Campo | Valor |
+|-------|-------|
+| **Friendly name** | `radar_poc_not_found_v1` |
+| **Language** | `Spanish` |
+| **Content type** | `Quick Reply` |
+| **Body** | Ver bloque abajo |
+
+**Body del mensaje** (copiar/pegar tal cual):
+
+```
+Esa empresa no está disponible en nuestros POC actuales 🤔
+
+¿Qué quieres hacer?
+```
+
+### 1.B.2 Botones
+
+| Posición | Title | Id |
+|----------|-------|-----|
+| Button 1 | `Intentar de nuevo` | `btn_poc_retry` |
+| Button 2 | `Ver demo general` | `btn_demo_general` |
+
+**Importante:**
+- El **Title** del Button 1 es `Intentar de nuevo` (con mayúsculas iniciales exactas). Cuando el usuario lo tapea, Twilio emite el texto literal "Intentar de nuevo" — el backend lo normaliza a minúsculas y el handler del POC intent lo trata como cualquier otra palabra. Pero lo importante es el comportamiento del botón: hace que el usuario vuelva al prompt.
+- Mejor opción: dentro del Quick Reply de Twilio, cada botón puede definir un "reply text" (`text` field en la API). Configúralo así para simplificar:
+  - Button 1 → **Id** `btn_poc_retry`, pero el campo "Reply" debe ser `poc` (Twilio lo enviará como texto del usuario cuando tapea el botón)
+  - Button 2 → **Id** `btn_demo_general`, Reply = `retail`
+- Si Twilio Console no muestra un campo "Reply text" separado, déjalo con Title=`Intentar de nuevo` y Title=`Ver demo general`. El backend hoy matchea el body completo contra `DEMO_ESCAPE_KEYWORDS` en lowercase, por lo que `intentar de nuevo` no matchea ninguna keyword conocida y el fallback de "empresa no encontrada" sigue activo pero en loop. **Revisar este punto con Jorge si el botón no está funcionando después de aprobación**.
+
+### 1.B.3 Guardar y aprobar
+
+- Click **Save** → **Submit for WhatsApp approval**
+- Esperar aprobación (usualmente 5-15 min)
+- Una vez aprobado, copiar el **Content SID** (`HXxxxxxxxx...`)
+
+---
+
 ## Paso 2 — Configurar el nuevo SID en el backoffice
 
 ### 2.1 Abrir la configuración de Telecable
@@ -99,6 +144,17 @@ Este demo convierte fotos, videos y audios en análisis de campo con IA.
 - Pegar el SID que copiaste en el paso 1.5
 - Click **Guardar** al final de la sección de Config
 - Confirmar que aparece el mensaje "Guardado" sin errores
+
+### 2.2.B Configurar el SID del "POC not found"
+
+Si creaste el template del Paso 1.B:
+- En el mismo tab **Configuración** → sección **Mensajes de Onboarding (WhatsApp)**
+- Buscar el campo **POC not found Content SID (opcional)**
+- Pegar el SID del template `radar_poc_not_found_v1`
+- Click **Guardar**
+- (Defensivo) Repetir en Laundry Care y Argos con el mismo SID
+
+Si NO creaste el template todavía, déjalo vacío. El backend usa un mensaje de texto plano con las mismas dos opciones (`poc` / `retail`) como fallback.
 
 ### 2.3 (Opcional pero recomendado) Repetir en Laundry Care y Argos
 
@@ -175,7 +231,11 @@ Abre un chat de WhatsApp con el número **+1 (779) 228-4312** desde tu celular. 
 ### 4.5 Flujo POC con nombre incorrecto
 
 - Reset → `hola` → **POC** → escribir `xponencial`
-- **Debe llegar:** "No reconocí ese cliente como un POC disponible... Te llevo al Demo Retail general..." + el post_switch de Retail
+- **Si configuraste el template del Paso 1.B:** debe llegar un card Quick Reply con botones *Intentar de nuevo* y *Ver demo general*
+- **Si NO configuraste el template:** debe llegar un texto plano "Esa empresa no está disponible... • Escribe *poc* para intentar con otro nombre / • Escribe *retail* para ver el demo general"
+- Probar el loop: escribir otro nombre no válido → debería llegar el mismo card/texto
+- Escribir `poc` (o tapear "Intentar de nuevo") → vuelve al prompt inicial de POC
+- Escribir `retail` (o tapear "Ver demo general") → switch a laundry_care con su post_switch
 
 ### 4.6 Flujo POC con foto antes de escribir nombre
 

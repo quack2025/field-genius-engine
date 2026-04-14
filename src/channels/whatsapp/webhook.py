@@ -731,7 +731,9 @@ async def _webhook_inner(request: Request) -> Response:
 
         # ── POC gating flow ────────────────────────────────────────
         # "POC" intent: user explicitly asked for a personalized POC. Set the
-        # pending flag and prompt for the client company name.
+        # pending flag and prompt for the client company name. The prompt does
+        # NOT reveal which clients are in the POC pipeline — the user must
+        # already know their company name.
         if is_demo_impl and body_lower in POC_KEYWORDS:
             from src.engine.supabase_client import set_pending_poc_selection, upsert_user
             if not user:
@@ -740,10 +742,8 @@ async def _webhook_inner(request: Request) -> Response:
             await send_message(
                 from_phone,
                 "Los POCs de Radar Xponencial están personalizados para clientes específicos 🎯\n\n"
-                "Escribe el nombre de tu empresa para activar el demo con sus frameworks reales:\n\n"
-                "• *argos*\n"
-                "• *telecable*\n\n"
-                "O escribe *retail* si prefieres el demo general de CPG.",
+                "Escribe el nombre de tu empresa para acceder a tu demo con frameworks reales.\n\n"
+                "_Si no tienes acceso a un POC, escribe *retail* para ver el demo general._",
                 from_number=to_number,
             )
             logger.info("poc_prompt_sent", phone=phone, impl=resolved_impl)
@@ -758,9 +758,6 @@ async def _webhook_inner(request: Request) -> Response:
         if is_demo_impl and pending_poc_active:
             from src.engine.supabase_client import (
                 clear_pending_poc_selection as _clear_poc,
-                upsert_user as _upsert_user,
-                update_session_implementation_today as _update_session_impl,
-                clear_session_files_today as _clear_files,
             )
             if body_lower in POC_COMPANY_KEYWORDS:
                 # Defensive — Step 1 would normally handle this. Clear and fall through.
@@ -771,31 +768,41 @@ async def _webhook_inner(request: Request) -> Response:
                 await _clear_poc(phone)
                 pending_poc_active = False
             else:
-                # Unknown text while pending POC → redirect to retail demo gracefully.
-                await _clear_poc(phone)
-                pending_poc_active = False
-                target_impl_id = "laundry_care"
-                try:
-                    from src.engine.config_loader import get_implementation
-                    target_config = await get_implementation(target_impl_id)
-                    await _upsert_user(phone, target_impl_id)
-                    await _update_session_impl(phone, target_impl_id)
-                    await _clear_files(phone)
-                    post_switch = (target_config.onboarding_config or {}).get(
-                        "post_switch_message",
-                        "Cambiado al *Demo Retail*. Enviame fotos y escribe *generar* cuando termines.",
-                    )
+                # Unknown text while pending POC → send a Quick Reply card offering
+                # the user two choices: retry with a different company name, or
+                # escape to the general Retail demo. KEEP pending_poc_active so the
+                # next message is still evaluated against this branch — the user
+                # only leaves the POC flow by tapping "Ver demo general" (which
+                # emits `retail` and fires the Step 1 keyword switch, clearing
+                # pending defensively) or by typing any DEMO_ESCAPE_KEYWORDS.
+                sid = (impl_config.onboarding_config or {}).get("poc_not_found_content_sid")
+                sent_via_template = False
+                if sid:
+                    try:
+                        from src.channels.whatsapp.sender import send_content_template
+                        template_sid = await send_content_template(
+                            from_phone,
+                            sid,
+                            content_variables=None,
+                            from_number=to_number,
+                        )
+                        sent_via_template = bool(template_sid)
+                    except Exception as e:
+                        logger.warning("poc_not_found_template_failed", phone=phone, error=str(e))
+                if not sent_via_template:
                     await send_message(
                         from_phone,
-                        "No reconocí ese cliente como un POC disponible 🤔\n\n"
-                        "Te llevo al *Demo Retail general* para que veas cómo funciona Radar Xponencial. "
-                        "Si querías otra empresa, escribe *argos* o *telecable* después.",
+                        "Esa empresa no está disponible en nuestros POC actuales 🤔\n\n"
+                        "• Escribe *poc* para intentar con otro nombre\n"
+                        "• Escribe *retail* para ver el demo general",
                         from_number=to_number,
                     )
-                    await send_message(from_phone, post_switch, from_number=to_number)
-                    logger.info("poc_wrong_name_redirected", phone=phone, wrote=body_lower[:30])
-                except Exception as e:
-                    logger.error("poc_redirect_failed", phone=phone, error=str(e))
+                logger.info(
+                    "poc_name_not_found",
+                    phone=phone,
+                    wrote=body_lower[:30],
+                    via_template=sent_via_template,
+                )
                 twiml = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
                 return Response(content=twiml, media_type="application/xml")
 
