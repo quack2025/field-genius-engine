@@ -647,34 +647,10 @@ async def _webhook_inner(request: Request) -> Response:
                         f"Envía más si quieres o escribe *generar* cuando termines para ver el análisis."
                     )
                 await send_message(from_phone, ack, from_number=to_number)
-
-                # Location prompt: if this was the first visual piece of material
-                # in the session AND there's no location yet AND we haven't already
-                # prompted (pending_location_active), ask now.
-                try:
-                    visual_total = sum(1 for f in all_files if f.get("type") in ("image", "audio", "video"))
-                    has_location = any(f.get("type") == "location" for f in all_files)
-                    if (
-                        visual_total == 1
-                        and not has_location
-                        and not pending_location_active
-                    ):
-                        from src.engine.supabase_client import set_pending_location_request
-                        await set_pending_location_request(phone)
-                        pending_location_active = True
-                        await send_message(
-                            from_phone,
-                            "¿Dónde tomaste esto? 📍\n\n"
-                            "Para que el análisis sea más preciso, cuéntame dónde estás:\n\n"
-                            "📎 *Opción 1*: Comparte tu ubicación desde el menú adjuntar de WhatsApp\n"
-                            "✍️ *Opción 2*: Escríbeme una descripción breve\n"
-                            "   _Ejemplos: \"supermercado Éxito Chapinero\", \"norte de Bogotá\", \"Mercadona Madrid centro\"_\n\n"
-                            "Puedes seguir enviando material mientras tanto. Al escribir *generar* analizo todo junto.",
-                            from_number=to_number,
-                        )
-                        logger.info("location_prompt_sent", phone=phone, session_id=session["id"][:8])
-                except Exception as e:
-                    logger.warning("location_prompt_failed", phone=phone, error=str(e))
+                # Note: the location / context questionnaire is now asked at
+                # "generar" time (see the DEMO_TRIGGER_KEYWORDS handler below)
+                # instead of during the photo burst, so that it's visible to
+                # the user when they're focused on the next step.
             else:
                 # Field-agent flow: accumulate and wait for "reporte" trigger word
                 file_count = len(session.get("raw_files", [])) + 1
@@ -843,8 +819,11 @@ async def _webhook_inner(request: Request) -> Response:
                 twiml = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
                 return Response(content=twiml, media_type="application/xml")
 
-        # Pending location follow-up: user was asked for their location and the
-        # next non-command text is saved as a free-form description.
+        # Pending location follow-up: the user received the pre-analysis
+        # questionnaire and is expected to reply with location/role/focus
+        # context. On a non-keyword reply we save the answer AND auto-spawn
+        # the batch analysis — the user already typed "generar" to get here,
+        # so they don't need to type it again.
         if is_demo_impl and pending_location_active:
             from src.engine.supabase_client import (
                 clear_pending_location_request as _clear_loc,
@@ -856,7 +835,10 @@ async def _webhook_inner(request: Request) -> Response:
                 await _clear_loc(phone)
                 pending_location_active = False
             else:
-                # Treat as a location description
+                # Treat as the full questionnaire answer (location + role + focus
+                # as free text). Save it as both the location row and pass it as
+                # text_context to the batch runner so the synthesis prompt gets
+                # everything.
                 import datetime as _dt
                 sess = await _get_session(phone, _dt.date.today(), resolved_impl)
                 await add_text_location_to_session(sess["id"], body)
@@ -864,11 +846,21 @@ async def _webhook_inner(request: Request) -> Response:
                 pending_location_active = False
                 await send_message(
                     from_phone,
-                    f"Anotado 📍 _{body[:120]}_\n\n"
-                    f"Sigue enviando material (fotos, audios, videos) o escribe *generar* cuando termines.",
+                    "¡Gracias! 🙌 Generando análisis con ese contexto…\n\n"
+                    "Te envío el reporte en unos segundos.",
                     from_number=to_number,
                 )
-                logger.info("text_location_captured", phone=phone, chars=len(body))
+                asyncio.create_task(
+                    _run_demo_batch_safe(
+                        session_id=sess["id"],
+                        impl_config=impl_config,
+                        phone=phone,
+                        from_phone=from_phone,
+                        to_number=to_number,
+                        text_context=body,
+                    )
+                )
+                logger.info("demo_questionnaire_answered", phone=phone, chars=len(body), session_id=sess["id"][:8])
                 twiml = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
                 return Response(content=twiml, media_type="application/xml")
 
@@ -958,23 +950,61 @@ async def _webhook_inner(request: Request) -> Response:
                 return Response(content=twiml, media_type="application/xml")
 
         # Demo mode trigger: if impl is in demo_mode and user types a trigger keyword,
-        # gather today's session files and generate a consolidated report.
+        # check for context and either start the pre-analysis questionnaire OR
+        # spawn the batch analysis.
         if (
             impl_config
             and impl_config.onboarding_config.get("demo_mode")
             and body_lower in DEMO_TRIGGER_KEYWORDS
         ):
             import datetime as _dt
-            from src.engine.supabase_client import get_or_create_session
-            # Silently clear any pending location — user is ready to generate
-            if pending_location_active:
-                try:
-                    from src.engine.supabase_client import clear_pending_location_request
-                    await clear_pending_location_request(phone)
-                    pending_location_active = False
-                except Exception:
-                    pass
+            from src.engine.supabase_client import (
+                get_or_create_session,
+                get_session_files,
+                set_pending_location_request,
+                clear_pending_location_request,
+            )
             session = await get_or_create_session(phone, _dt.date.today(), resolved_impl)
+
+            # Check if we already have context for this session
+            try:
+                existing_files = await get_session_files(session["id"])
+                has_location = any(f.get("type") == "location" for f in existing_files)
+            except Exception:
+                has_location = False
+
+            # If the user already has pending_location_active AND typed "generar"
+            # a second time, they're escaping the questionnaire — clear and proceed.
+            if pending_location_active:
+                await clear_pending_location_request(phone)
+                pending_location_active = False
+                logger.info("demo_questionnaire_skipped", phone=phone)
+
+            # If no location context AND we haven't already asked, send the
+            # pre-analysis questionnaire (location + role + focus in one message)
+            # and wait for the user's reply.
+            elif not has_location:
+                await set_pending_location_request(phone)
+                pending_location_active = True
+                await send_message(
+                    from_phone,
+                    "Antes de generar tu análisis, contáme en un solo mensaje:\n\n"
+                    "📍 *¿Dónde tomaste esto?*\n"
+                    "    _ej: \"Mercadona Madrid centro\", \"norte de Bogotá\"_\n\n"
+                    "👤 *¿Cuál es tu rol?*\n"
+                    "    _ej: trade marketing, mercaderista, investigación_\n\n"
+                    "🎯 *¿Qué quieres que enfoque el análisis?*\n"
+                    "    _ej: precios, agotados, layout, competencia_\n\n"
+                    "Respondé como te salga natural — yo extraigo lo importante.\n\n"
+                    "_En la versión completa, Radar Xponencial adapta estas preguntas al flujo de tu equipo: las podés quitar, cambiar o agregar más según tu operación._\n\n"
+                    "_Si prefieres saltar, escribí *generar* de nuevo._",
+                    from_number=to_number,
+                )
+                logger.info("demo_questionnaire_sent", phone=phone, session_id=session["id"][:8])
+                twiml = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>'
+                return Response(content=twiml, media_type="application/xml")
+
+            # Has context (or user just escaped the questionnaire) → run batch
             await send_message(
                 from_phone,
                 "Generando análisis de todo lo que enviaste… 🔍\nTe envío el reporte en unos segundos.",
@@ -1138,6 +1168,7 @@ async def _run_demo_batch_safe(
     phone: str,
     from_phone: str,
     to_number: str,
+    text_context: str | None = None,
 ) -> None:
     """Run consolidated demo batch analysis on all files in today's session.
 
@@ -1210,7 +1241,7 @@ async def _run_demo_batch_safe(
             impl_config=impl_config,
             country_name=country_name,
             location_hint=location_hint,
-            text_context=None,
+            text_context=text_context,
         )
 
         await send_message(from_phone, report, from_number=to_number)
