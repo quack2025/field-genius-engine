@@ -35,10 +35,48 @@ logger = structlog.get_logger(__name__)
 
 HAIKU = "claude-haiku-4-5-20251001"
 
-# Soft caps for analysis (user can send more — most recent are kept)
-MAX_IMAGES_PER_BATCH = 8
-MAX_AUDIOS_PER_BATCH = 4
-MAX_VIDEOS_PER_BATCH = 2  # videos are expensive (ffmpeg + vision + whisper)
+# Default soft caps for analysis (most recent are kept). These are now the
+# fallback when an implementation doesn't override them via onboarding_config:
+#   demo_max_images_per_batch
+#   demo_max_audios_per_batch
+#   demo_max_videos_per_batch
+# Each project can tune its own limits from the backoffice.
+DEFAULT_MAX_IMAGES_PER_BATCH = 8
+DEFAULT_MAX_AUDIOS_PER_BATCH = 4
+DEFAULT_MAX_VIDEOS_PER_BATCH = 2  # videos are expensive (ffmpeg + vision + whisper)
+# Backwards-compat aliases — DO NOT use in new code, kept only so any external
+# importer (tests, old branches) doesn't break. Will be removed in a later sprint.
+MAX_IMAGES_PER_BATCH = DEFAULT_MAX_IMAGES_PER_BATCH
+MAX_AUDIOS_PER_BATCH = DEFAULT_MAX_AUDIOS_PER_BATCH
+MAX_VIDEOS_PER_BATCH = DEFAULT_MAX_VIDEOS_PER_BATCH
+
+
+def get_demo_caps(impl_config: "ImplementationConfig") -> tuple[int, int, int]:
+    """Resolve the per-project demo batch caps from onboarding_config.
+
+    Returns (max_images, max_audios, max_videos). Falls back to DEFAULT_*
+    when a key is missing or invalid. Always returns at least 1 image,
+    0 audios, 0 videos. No upper hard cap — the analyzer trusts the
+    configured values; abuse protection lives at a higher layer in the
+    webhook (ABUSE_CAP_*).
+    """
+    ob = impl_config.onboarding_config or {}
+
+    def _read(key: str, default: int, minimum: int = 0) -> int:
+        raw = ob.get(key)
+        if raw is None or raw == "":
+            return default
+        try:
+            n = int(raw)
+        except (TypeError, ValueError):
+            return default
+        return max(n, minimum)
+
+    return (
+        _read("demo_max_images_per_batch", DEFAULT_MAX_IMAGES_PER_BATCH, minimum=1),
+        _read("demo_max_audios_per_batch", DEFAULT_MAX_AUDIOS_PER_BATCH, minimum=0),
+        _read("demo_max_videos_per_batch", DEFAULT_MAX_VIDEOS_PER_BATCH, minimum=0),
+    )
 
 # Source types that Vision returns on the first line of each demo description.
 # Any unknown value defaults to INCIERTO.
@@ -158,19 +196,22 @@ async def generate_demo_report(
     """
     start = time.time()
 
+    # Per-project caps from onboarding_config (fallback to DEFAULT_*)
+    max_images, max_audios, max_videos = get_demo_caps(impl_config)
+
     # Split files by type and apply soft caps (keep most recent)
     images = [f for f in files if f.get("type") == "image" and f.get("storage_path")]
     videos = [f for f in files if f.get("type") == "video" and f.get("storage_path")]
     audios = [f for f in files if f.get("type") == "audio" and f.get("storage_path")]
 
-    if len(images) > MAX_IMAGES_PER_BATCH:
-        logger.info("demo_batch_images_capped", total=len(images), kept=MAX_IMAGES_PER_BATCH)
-        images = images[-MAX_IMAGES_PER_BATCH:]
-    if len(videos) > MAX_VIDEOS_PER_BATCH:
-        logger.info("demo_batch_videos_capped", total=len(videos), kept=MAX_VIDEOS_PER_BATCH)
-        videos = videos[-MAX_VIDEOS_PER_BATCH:]
-    if len(audios) > MAX_AUDIOS_PER_BATCH:
-        audios = audios[-MAX_AUDIOS_PER_BATCH:]
+    if len(images) > max_images:
+        logger.info("demo_batch_images_capped", total=len(images), kept=max_images, impl=impl_config.id)
+        images = images[-max_images:]
+    if len(videos) > max_videos:
+        logger.info("demo_batch_videos_capped", total=len(videos), kept=max_videos, impl=impl_config.id)
+        videos = videos[-max_videos:]
+    if len(audios) > max_audios:
+        audios = audios[-max_audios:]
 
     if not images and not videos:
         raise RuntimeError("no_visual_content")
