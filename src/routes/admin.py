@@ -620,11 +620,47 @@ async def get_session_detail(session_id: str, user: BackofficeUser = Depends(get
 
     session_data = session.data
 
-    # Generate signed URLs for media files (bucket is private)
-    # Defensive: raw_files is a JSONB array that historically has contained
-    # mixed shapes (dicts, strings from legacy code). Filter to dicts first.
-    raw_files_raw = session_data.get("raw_files") or []
-    raw_files = [f for f in raw_files_raw if isinstance(f, dict)]
+    # ── Read files from the normalized session_files table ──
+    # This table is the source of truth since sprint O-3. The legacy
+    # sessions.raw_files JSONB column is kept for backwards compat but
+    # is NOT authoritative anymore — several helpers added during the
+    # demo sprints (add_caption_to_session, add_text_location_to_session,
+    # content_gate flows, clear_session_files_today) only touch
+    # session_files and leave raw_files empty or stale.
+    #
+    # We project session_files rows into the shape the frontend expects
+    # (raw_files-style dicts) so the UI renders without any changes.
+    from src.engine.supabase_client import get_session_files
+    try:
+        session_files_rows = await get_session_files(session_id)
+    except Exception as e:
+        logger.warning("session_files_read_failed", session_id=session_id, error=str(e))
+        session_files_rows = []
+
+    raw_files: list[dict[str, Any]] = []
+    for f in session_files_rows:
+        if not isinstance(f, dict):
+            continue
+        raw_files.append({
+            "filename": f.get("filename"),
+            "storage_path": f.get("storage_path"),
+            "type": f.get("type"),
+            "content_type": f.get("content_type"),
+            "size_bytes": f.get("size_bytes"),
+            "latitude": f.get("latitude"),
+            "longitude": f.get("longitude"),
+            "address": f.get("address"),
+            "label": f.get("label"),
+            "timestamp": f.get("created_at"),
+            "transcription": f.get("transcription"),
+            "image_description": f.get("image_description"),
+            "content_category": f.get("content_category"),
+            "blocked": f.get("blocked"),
+            "flagged": f.get("flagged"),
+            "public_url": f.get("public_url"),
+        })
+
+    # Generate signed URLs for media files (private bucket)
     paths_to_sign = [f["storage_path"] for f in raw_files if f.get("storage_path")]
     if paths_to_sign:
         try:
@@ -643,8 +679,9 @@ async def get_session_detail(session_id: str, user: BackofficeUser = Depends(get
                 sp = f.get("storage_path")
                 if sp:
                     f["public_url"] = f"{settings.supabase_url}/storage/v1/object/public/media/{sp}"
-    # Replace the original raw_files with the filtered one so the UI doesn't
-    # receive malformed entries either.
+
+    # Replace raw_files on the session dict so the frontend sees the
+    # authoritative projection (not the stale JSONB column).
     session_data["raw_files"] = raw_files
 
     # Fetch visit reports for this session
