@@ -40,6 +40,34 @@ MAX_IMAGES_PER_BATCH = 8
 MAX_AUDIOS_PER_BATCH = 4
 MAX_VIDEOS_PER_BATCH = 2  # videos are expensive (ffmpeg + vision + whisper)
 
+# Source types that Vision returns on the first line of each demo description.
+# Any unknown value defaults to INCIERTO.
+VALID_SOURCE_TYPES = {"CAMPO", "CAPTURA_DIGITAL", "MIXTO", "INCIERTO"}
+
+
+def _parse_source_tag(description: str) -> tuple[str, str]:
+    """Extract a 'FUENTE=...' marker from the first line of a Vision
+    description and return (source_type, cleaned_description).
+
+    If the marker is missing or unrecognized, returns ('INCIERTO', original).
+    Robust to the LLM occasionally ignoring the instruction or adding
+    trailing whitespace / punctuation.
+    """
+    if not description:
+        return "INCIERTO", description
+    lines = description.splitlines()
+    if not lines:
+        return "INCIERTO", description
+    first = lines[0].strip()
+    # Accept variants: "FUENTE=CAMPO", "FUENTE= CAMPO", "FUENTE: CAMPO"
+    if first.upper().startswith("FUENTE"):
+        after_eq = first.split("=", 1)[-1] if "=" in first else first.split(":", 1)[-1] if ":" in first else ""
+        token = after_eq.strip().split()[0].strip(".,;:").upper() if after_eq.strip() else ""
+        if token in VALID_SOURCE_TYPES:
+            rest = "\n".join(lines[1:]).lstrip()
+            return token, rest
+    return "INCIERTO", description
+
 _client: AsyncAnthropic | None = None
 
 
@@ -86,7 +114,24 @@ Reglas estrictas:
 - Si hay múltiples fotos del mismo punto, consolida (no repitas hallazgos). Si muestran puntos distintos, agrupa.
 - Si el usuario dio contexto por audio/texto, intégralo naturalmente — no lo repitas literal.
 - Cero disclaimers, cero hedging, ve directo al insight.
-- Si las fotos NO son relevantes al caso (selfies, paisajes), entrega un reporte corto explicando qué sí se ve e invita a enviar fotos del punto de venta."""
+- Si las fotos NO son relevantes al caso (selfies, paisajes), entrega un reporte corto explicando qué sí se ve e invita a enviar fotos del punto de venta.
+
+Tipo de fuente de cada foto (CRÍTICO):
+- Cada foto/video trae entre corchetes el tipo de fuente: [fuente: CAMPO], [fuente: CAPTURA_DIGITAL], [fuente: MIXTO] o [fuente: INCIERTO].
+- *CAMPO* = foto tomada en el mundo real (valla física, tienda, fachada, obra, producto en anaquel, folleto impreso). Representa *presencia física* en el mercado.
+- *CAPTURA_DIGITAL* = screenshot de red social, web, app, anuncio online, publicación de Instagram/Facebook/TikTok/LinkedIn, captura de pantalla. Representa *canal digital* de la marca.
+- *MIXTO* = foto de una pantalla mostrando contenido digital, o contenido ambiguo. Tratar como CAPTURA_DIGITAL si el contenido es claramente publicitario.
+- *INCIERTO* = no se pudo determinar; trata la foto de forma general.
+
+REGLA NO NEGOCIABLE: *NO mezcles* hallazgos de CAMPO con CAPTURA_DIGITAL como si fueran del mismo plano. Son canales diferentes con implicancias estratégicas diferentes:
+- Los hallazgos de CAMPO responden a "¿quién está físicamente presente en el territorio?" (presencia en puntos de venta, share of shelf físico, vallas publicitarias, material POP).
+- Los hallazgos de CAPTURA_DIGITAL responden a "¿qué narrativa está empujando la marca en canales digitales?" (posicionamiento, alianzas anunciadas, tono, engagement visible).
+
+Cuando haya AMBOS tipos en el batch, estructura los hallazgos con etiquetas explícitas. Ejemplo:
+- _*Presencia física (CAMPO):* Liberty domina Parque La Sabana con 3 vallas de fibra simétrica…_
+- _*Canal digital (CAPTURA_DIGITAL):* Liberty y Kólbi anuncian alianzas Starlink en Instagram, apuntando a mercados rurales…_
+
+Cuando haya SOLO un tipo (ej: todos CAMPO o todos CAPTURA_DIGITAL), no fuerces la división — hazlo natural como siempre."""
 
 
 async def generate_demo_report(
@@ -178,22 +223,32 @@ async def generate_demo_report(
         except Exception as e:
             logger.warning("demo_video_process_failed", idx=i, error=str(e)[:100])
 
-    # Step 1b: Parallel vision analysis — stored images + in-memory video frames
+    # Step 1b: Parallel vision analysis — stored images + in-memory video frames.
+    # Demo mode: ask Vision to prefix each response with a FUENTE=... marker
+    # so we can distinguish in-site photos from screenshots of social/web
+    # content and tag them structurally for the synthesis prompt.
+    total_visual = len(images) + len(video_frame_bytes)
     storage_image_tasks = [
         analyze_from_storage(
             storage_path=img["storage_path"],
             context=vision_context,
             implementation=impl_config.id,
+            demo_mode=True,
+            image_index=i,
+            image_total=total_visual,
         )
-        for img in images
+        for i, img in enumerate(images)
     ]
     frame_tasks = [
         analyze_image(
             image_bytes=frame_bytes,
             context=vision_context,
             implementation=impl_config.id,
+            demo_mode=True,
+            image_index=len(images) + i,
+            image_total=total_visual,
         )
-        for frame_bytes, _label in video_frame_bytes
+        for i, (frame_bytes, _label) in enumerate(video_frame_bytes)
     ]
     # Step 1c: Parallel audio transcription for standalone audio files
     audio_tasks = [transcribe(a["storage_path"]) for a in audios]
@@ -207,29 +262,40 @@ async def generate_demo_report(
     frame_results = all_results[n_stored : n_stored + n_frames]
     audio_results = all_results[n_stored + n_frames :]
 
-    # Collect successful descriptions with source tag so we can count by type later
-    tagged_descriptions: list[tuple[str, str]] = []  # (source_type, formatted text)
+    # Collect successful descriptions. Each entry carries:
+    #   media_kind: "photo" | "video" (for asset_summary counting)
+    #   source_type: CAMPO | CAPTURA_DIGITAL | MIXTO | INCIERTO (from Vision)
+    #   text: formatted description prefixed with label + [fuente: X]
+    tagged_descriptions: list[tuple[str, str, str]] = []
     for i, result in enumerate(stored_results):
         if isinstance(result, Exception) or (isinstance(result, str) and result.startswith("[Error")):
             logger.warning("demo_image_analysis_failed", idx=i, error=str(result)[:100])
             continue
-        tagged_descriptions.append(
-            ("photo", f"**Foto {i + 1}** ({images[i].get('filename', 'unknown')}):\n{result}")
-        )
+        source_type, cleaned = _parse_source_tag(result)
+        logger.info("vision_source_tag_parsed", idx=i, source_type=source_type, kind="photo")
+        label = f"**Foto {i + 1}** ({images[i].get('filename', 'unknown')}) [fuente: {source_type}]:\n{cleaned}"
+        tagged_descriptions.append(("photo", source_type, label))
 
     for i, result in enumerate(frame_results):
-        label = video_frame_bytes[i][1]
+        video_label = video_frame_bytes[i][1]
         if isinstance(result, Exception) or (isinstance(result, str) and result.startswith("[Error")):
             logger.warning("demo_video_frame_analysis_failed", idx=i, error=str(result)[:100])
             continue
-        tagged_descriptions.append(("video", f"**{label}** (primer frame):\n{result}"))
+        source_type, cleaned = _parse_source_tag(result)
+        logger.info("vision_source_tag_parsed", idx=i, source_type=source_type, kind="video")
+        label = f"**{video_label}** (primer frame) [fuente: {source_type}]:\n{cleaned}"
+        tagged_descriptions.append(("video", source_type, label))
 
     if not tagged_descriptions:
         raise RuntimeError("all_visual_content_failed")
 
-    descriptions = [text for _, text in tagged_descriptions]
-    n_photos = sum(1 for t, _ in tagged_descriptions if t == "photo")
-    n_video_frames = sum(1 for t, _ in tagged_descriptions if t == "video")
+    descriptions = [text for _, _, text in tagged_descriptions]
+    n_photos = sum(1 for kind, _, _ in tagged_descriptions if kind == "photo")
+    n_video_frames = sum(1 for kind, _, _ in tagged_descriptions if kind == "video")
+    # Source-type counts across photos+videos (for asset_summary + synthesis hint)
+    source_counts: dict[str, int] = {}
+    for _kind, source_type, _ in tagged_descriptions:
+        source_counts[source_type] = source_counts.get(source_type, 0) + 1
 
     transcripts: list[str] = list(video_transcripts)
     for i, result in enumerate(audio_results):
@@ -240,11 +306,26 @@ async def generate_demo_report(
             transcripts.append(f"**Audio {i + 1}**: {result.strip()}")
 
     # Step 3: Synthesize consolidated report
+    # Prefer the richer per-source breakdown when the batch mixes CAMPO and
+    # CAPTURA_DIGITAL — otherwise fall back to the plain "N fotos" summary.
+    n_campo = source_counts.get("CAMPO", 0)
+    n_digital = source_counts.get("CAPTURA_DIGITAL", 0) + source_counts.get("MIXTO", 0)
+    n_incierto = source_counts.get("INCIERTO", 0)
+    has_meaningful_mix = n_campo > 0 and n_digital > 0
+
     asset_pieces: list[str] = []
-    if n_photos:
-        asset_pieces.append(f"{n_photos} foto{'s' if n_photos != 1 else ''}")
-    if n_video_frames:
-        asset_pieces.append(f"{n_video_frames} video{'s' if n_video_frames != 1 else ''}")
+    if has_meaningful_mix:
+        if n_campo:
+            asset_pieces.append(f"{n_campo} foto{'s' if n_campo != 1 else ''} de campo")
+        if n_digital:
+            asset_pieces.append(f"{n_digital} captura{'s' if n_digital != 1 else ''} de redes sociales")
+        if n_incierto:
+            asset_pieces.append(f"{n_incierto} foto{'s' if n_incierto != 1 else ''}")
+    else:
+        if n_photos:
+            asset_pieces.append(f"{n_photos} foto{'s' if n_photos != 1 else ''}")
+        if n_video_frames:
+            asset_pieces.append(f"{n_video_frames} video{'s' if n_video_frames != 1 else ''}")
     if transcripts:
         asset_pieces.append(f"{len(transcripts)} audio{'s' if len(transcripts) != 1 else ''}")
     asset_summary = " y ".join(asset_pieces) or "tu material"
@@ -300,6 +381,10 @@ async def generate_demo_report(
         elapsed_ms=elapsed_ms,
         country=country_name,
         has_location=bool(location_hint),
+        source_campo=source_counts.get("CAMPO", 0),
+        source_digital=source_counts.get("CAPTURA_DIGITAL", 0),
+        source_mixto=source_counts.get("MIXTO", 0),
+        source_incierto=source_counts.get("INCIERTO", 0),
         input_tokens=message.usage.input_tokens,
         output_tokens=message.usage.output_tokens,
     )

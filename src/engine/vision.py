@@ -47,19 +47,35 @@ async def analyze_image(
     context: str = "",
     implementation: str = "",
     max_retries: int = 2,
+    demo_mode: bool = False,
+    image_index: int | None = None,
+    image_total: int | None = None,
 ) -> str:
     """Analyze a single image using the implementation's vision strategy.
 
     Strategy is read from the implementation config:
       - sonnet_only: direct Sonnet call
       - tiered: Haiku first, escalate to Sonnet if shallow
+
+    When ``demo_mode=True``, the prompt asks the model to prefix its response
+    with a ``FUENTE=[CAMPO|CAPTURA_DIGITAL|MIXTO|INCIERTO]`` marker so the
+    caller can distinguish in-site photos from screenshots of social media /
+    web content. Defaults to False to preserve the production field-agent
+    pipeline. ``image_index``/``image_total`` are optional positional hints
+    ("foto 2 de 5") that only apply when demo_mode is True.
     """
     from src.engine.config_loader import get_vision_strategy
     strategy = await get_vision_strategy(implementation) if implementation else "sonnet_only"
 
     if strategy == "tiered":
-        return await _analyze_tiered(image_bytes, context, implementation, max_retries)
-    return await _analyze_with_model(image_bytes, context, implementation, SONNET, max_retries)
+        return await _analyze_tiered(
+            image_bytes, context, implementation, max_retries,
+            demo_mode=demo_mode, image_index=image_index, image_total=image_total,
+        )
+    return await _analyze_with_model(
+        image_bytes, context, implementation, SONNET, max_retries,
+        demo_mode=demo_mode, image_index=image_index, image_total=image_total,
+    )
 
 
 async def _analyze_tiered(
@@ -67,12 +83,18 @@ async def _analyze_tiered(
     context: str,
     implementation: str,
     max_retries: int,
+    demo_mode: bool = False,
+    image_index: int | None = None,
+    image_total: int | None = None,
 ) -> str:
     """Tiered strategy: Haiku first → escalate to Sonnet if quality is low."""
     start = time.time()
 
     # Step 1: Try Haiku (fast + cheap)
-    haiku_result = await _analyze_with_model(image_bytes, context, implementation, HAIKU, max_retries)
+    haiku_result = await _analyze_with_model(
+        image_bytes, context, implementation, HAIKU, max_retries,
+        demo_mode=demo_mode, image_index=image_index, image_total=image_total,
+    )
 
     # Step 2: Evaluate quality
     should_escalate, reason = _should_escalate(haiku_result)
@@ -94,7 +116,10 @@ async def _analyze_tiered(
         haiku_chars=len(haiku_result),
         implementation=implementation,
     )
-    sonnet_result = await _analyze_with_model(image_bytes, context, implementation, SONNET, max_retries)
+    sonnet_result = await _analyze_with_model(
+        image_bytes, context, implementation, SONNET, max_retries,
+        demo_mode=demo_mode, image_index=image_index, image_total=image_total,
+    )
 
     elapsed_ms = int((time.time() - start) * 1000)
     logger.info(
@@ -136,6 +161,9 @@ async def _analyze_with_model(
     implementation: str,
     model: str,
     max_retries: int,
+    demo_mode: bool = False,
+    image_index: int | None = None,
+    image_total: int | None = None,
 ) -> str:
     """Core image analysis using a specific Claude model."""
     start = time.time()
@@ -151,7 +179,25 @@ async def _analyze_with_model(
     image_b64 = base64.standard_b64encode(image_bytes).decode("utf-8")
     media_type = _detect_media_type(image_bytes)
 
-    user_text = "Analiza esta imagen capturada durante una visita de campo."
+    if demo_mode:
+        # Demo flow: ask Haiku/Sonnet to distinguish in-site photos from
+        # screenshots of social media / web content. The caller (demo_analyzer)
+        # parses the FUENTE= marker on the first line and strips it before
+        # passing to synthesis.
+        position_hint = ""
+        if image_index is not None and image_total is not None and image_total > 0:
+            position_hint = f" (foto {image_index + 1} de {image_total})"
+        user_text = (
+            f"Analiza esta imagen{position_hint} enviada por el usuario para un análisis de campo.\n\n"
+            "En la *PRIMERA LÍNEA* de tu respuesta, escribe exactamente uno de estos marcadores, sin nada más:\n"
+            "  FUENTE=CAMPO            (foto tomada en el mundo real: valla, tienda, fachada, obra, producto en anaquel)\n"
+            "  FUENTE=CAPTURA_DIGITAL  (screenshot de redes sociales, web, app, captura de pantalla)\n"
+            "  FUENTE=MIXTO            (foto de una pantalla mostrando contenido digital, o contenido ambiguo)\n"
+            "  FUENTE=INCIERTO         (no se puede determinar con confianza)\n\n"
+            "Después del marcador, deja una línea en blanco y sigue con tu análisis normal de la imagen."
+        )
+    else:
+        user_text = "Analiza esta imagen capturada durante una visita de campo."
     if context:
         user_text += f"\nContexto: {context}"
 
@@ -229,12 +275,23 @@ async def analyze_from_storage(
     storage_path: str,
     context: str = "",
     implementation: str = "",
+    demo_mode: bool = False,
+    image_index: int | None = None,
+    image_total: int | None = None,
 ) -> str:
-    """Download image from Supabase Storage and analyze it."""
+    """Download image from Supabase Storage and analyze it.
+
+    ``demo_mode`` / ``image_index`` / ``image_total`` are forwarded to
+    ``analyze_image`` so the demo flow can request the FUENTE= marker and
+    positional framing. Defaults preserve the production field-agent pipeline.
+    """
     from src.engine.supabase_client import _run
     sb = get_client()
     image_bytes = await _run(lambda: sb.storage.from_("media").download(storage_path))
-    return await analyze_image(image_bytes, context, implementation)
+    return await analyze_image(
+        image_bytes, context, implementation,
+        demo_mode=demo_mode, image_index=image_index, image_total=image_total,
+    )
 
 
 MAX_IMAGE_DIMENSION = 1536  # Claude Vision optimal: 1568px max, use 1536 for safety
