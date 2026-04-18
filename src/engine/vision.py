@@ -20,7 +20,7 @@ from src.engine.supabase_client import get_client
 
 logger = structlog.get_logger(__name__)
 
-SONNET = "claude-sonnet-4-20250514"
+SONNET = "claude-sonnet-4-6"
 HAIKU = "claude-haiku-4-5-20251001"
 
 # Thresholds for tiered escalation — Haiku typically produces 2000-5000+ chars,

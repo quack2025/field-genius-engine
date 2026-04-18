@@ -755,7 +755,7 @@ async def test_vision_prompt(request: Request, body: TestVisionRequest, user: Ba
         b64 = base64.b64encode(image_bytes).decode()
 
         response = await client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-4-6",
             max_tokens=1500,
             system=body.vision_prompt,
             messages=[{

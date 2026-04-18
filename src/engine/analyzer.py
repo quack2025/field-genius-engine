@@ -113,7 +113,7 @@ async def generate_report(
     """
     start = time.time()
     framework_name = framework_config.get("name", report_type)
-    model = framework_config.get("model", "claude-sonnet-4-20250514")
+    model = framework_config.get("model", "claude-sonnet-4-6")
     system_prompt = framework_config.get("system_prompt", "")
     sections = framework_config.get("sections", [])
 
@@ -470,7 +470,7 @@ FORMATO: Markdown profesional. Resumen ejecutivo de 5 lineas al inicio. Usa tabl
         system = framework_config.get("system_prompt", "")
         client = get_anthropic_client()
         message = await client.messages.create(
-            model=framework_config.get("model", "claude-sonnet-4-20250514"),
+            model=framework_config.get("model", "claude-sonnet-4-6"),
             max_tokens=10000,
             system=system,
             messages=[{"role": "user", "content": prompt}],
@@ -549,7 +549,7 @@ FORMATO: Markdown ejecutivo. Executive Summary de 5-7 lineas. Tablas comparativa
         system = framework_config.get("system_prompt", "")
         client = get_anthropic_client()
         message = await client.messages.create(
-            model=framework_config.get("model", "claude-sonnet-4-20250514"),
+            model=framework_config.get("model", "claude-sonnet-4-6"),
             max_tokens=12000,
             system=system,
             messages=[{"role": "user", "content": prompt}],
